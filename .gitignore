@@ -4,8 +4,11 @@
 # binário baixado sob demanda na primeira execução
 yt-dlp.exe
 
-# saída
+# saída — nunca versionar: é conteúdo interno extraído da documentação, e
+# print de tela de sistema costuma conter token, senha e dado de cliente
 transcricoes/
+imagens/
+quadros/
 
 __pycache__/
 *.pyc
