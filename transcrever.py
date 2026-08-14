@@ -26,6 +26,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import winreg
 from pathlib import Path
 
@@ -41,6 +42,13 @@ URL_YTDLP = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.ex
 # grande, e o proxy corporativo derruba conexão longa; o próprio yt-dlp fatia
 # por esse motivo. Aumentar isso reintroduz timeout em vídeo de dezenas de MB.
 PEDACO_BYTES = 8 * 1024 * 1024
+
+# O googlevideo estrangula por IP: medido em 2026-08-14, dois downloads
+# seguidos passam e o terceiro leva 403 — mesmo pedindo URL nova, o que
+# descarta URL expirada como causa. Quinze segundos de espera liberam. Daí a
+# pausa entre vídeos e a segunda tentativa; sem elas, processar um artigo com
+# vários vídeos falha a partir do terceiro.
+ESPERA_ESTRANGULAMENTO = 15
 
 # Resolução é o fator limitante para ler texto de terminal no quadro, então
 # pede-se o maior formato até 1080p. `avc1` primeiro porque é o codec que
@@ -129,10 +137,20 @@ $ErrorActionPreference = 'Stop'
 $u = $env:YTV_URL
 $pedaco = [int]$env:YTV_PEDACO
 
+# Os headers vêm do yt-dlp e NÃO são decoração: a URL do googlevideo é
+# assinada para o cliente que a pediu. Buscar com o User-Agent padrão do
+# PowerShell devolve 403 Forbidden — reproduzido em 2026-08-14. Removê-los
+# faz o download voltar a falhar assim que o yt-dlp trocar de player.
+$headers = @{}
+if ($env:YTV_HEADERS) {
+    ($env:YTV_HEADERS | ConvertFrom-Json).PSObject.Properties |
+        ForEach-Object { $headers[$_.Name] = $_.Value }
+}
+
 # GetProxy devolve a própria URL quando não há proxy configurado; nesse caso
 # passar -Proxy apontaria o download para si mesmo.
 $px = [System.Net.WebRequest]::DefaultWebProxy.GetProxy($u)
-$parametros = @{ UseBasicParsing = $true; TimeoutSec = 120 }
+$parametros = @{ UseBasicParsing = $true; TimeoutSec = 120; Headers = $headers }
 if ($px.Host -ne ([Uri]$u).Host) {
     $parametros.Proxy = $px
     $parametros.ProxyUseDefaultCredentials = $true
@@ -143,9 +161,15 @@ try {
     $inicio = 0
     while ($true) {
         $fim = $inicio + $pedaco - 1
-        # `&range=` como PARÂMETRO DE URL. O header Range funciona em alguns
-        # formatos, mas o parâmetro é o que o yt-dlp usa e vale para todos.
-        $r = Invoke-WebRequest -Uri "$u&range=$inicio-$fim" @parametros
+        try {
+            # `&range=` como PARÂMETRO DE URL. O header Range funciona em
+            # alguns formatos, mas o parâmetro é o que o yt-dlp usa e vale
+            # para todos.
+            $r = Invoke-WebRequest -Uri "$u&range=$inicio-$fim" @parametros
+        } catch {
+            $codigo = $_.Exception.Response.StatusCode.value__
+            throw "HTTP $codigo ao baixar o pedaco a partir de $inicio"
+        }
         $bytes = $r.Content
         if ($bytes.Length -eq 0) { break }
         $arquivo.Write($bytes, 0, $bytes.Length)
@@ -175,17 +199,20 @@ def dados_do_video(url: str, proxy: str | None) -> dict:
         "--no-warnings", "--quiet",
         "-f", FORMATO_VIDEO,
         "--print", "%(filesize,filesize_approx)s|%(formats.:.acodec)s|%(url)s",
+        # numa linha separada porque o JSON dos headers contém "|"
+        "--print", "%(http_headers)j",
         url,
     ]
     if proxy:
         comando[1:1] = ["--proxy", proxy]
 
+    vazio = {"url": "", "tamanho": 0, "tem_audio": False, "headers": "{}"}
     resultado = subprocess.run(comando, capture_output=True, text=True)
-    linha = resultado.stdout.strip().splitlines()
-    if not linha or linha[0].count("|") < 2:
-        return {"url": "", "tamanho": 0, "tem_audio": False}
+    linhas = resultado.stdout.strip().splitlines()
+    if len(linhas) < 2 or linhas[0].count("|") < 2:
+        return vazio
 
-    tamanho, codecs, direta = linha[0].split("|", 2)
+    tamanho, codecs, direta = linhas[0].split("|", 2)
     try:
         esperado = int(tamanho)
     except ValueError:
@@ -194,40 +221,60 @@ def dados_do_video(url: str, proxy: str | None) -> dict:
     # a lista vem como repr de Python: ['none', 'mp4a.40.2', ...]
     tem_audio = any(c not in ("none", "None", "")
                     for c in re.findall(r"'([^']*)'", codecs))
-    return {"url": direta, "tamanho": esperado, "tem_audio": tem_audio}
+    return {"url": direta, "tamanho": esperado, "tem_audio": tem_audio,
+            "headers": linhas[1]}
 
 
-def baixar_video(url: str, destino: Path, proxy: str | None) -> dict | None:
-    """Baixa o vídeo para `destino`. None se não houver formato disponível.
+def baixar_video(url: str, destino: Path, proxy: str | None) -> dict:
+    """Baixa o vídeo para `destino`.
 
-    Devolve os dados de origem (`arquivo`, `tem_audio`) porque quem chama
-    precisa do `tem_audio` da origem, que o arquivo baixado não revela.
+    Devolve `{"arquivo", "tem_audio", "erro"}`. `arquivo` é None quando falhou,
+    e `erro` diz **por quê** — sem formato disponível e download recusado são
+    causas diferentes, e tratá-las como a mesma manda quem depura para o lado
+    errado (foi o que aconteceu com um 403 relatado como "sem formato").
+
+    O `tem_audio` é da ORIGEM, não do arquivo: baixa-se video-only.
     """
-    dados = dados_do_video(url, proxy)
-    if not dados["url"]:
-        return None
+    # Duas tentativas: a URL é reassinada a cada volta, então a segunda cobre
+    # tanto o estrangulamento por IP quanto uma assinatura recusada.
+    for tentativa in (1, 2):
+        dados = dados_do_video(url, proxy)
+        if not dados["url"]:
+            return {"arquivo": None, "tem_audio": False,
+                    "erro": "o yt-dlp não devolveu formato de vídeo"}
 
-    esperado = dados["tamanho"]
-    ambiente = {
-        **os.environ,
-        "YTV_URL": dados["url"],
-        "YTV_SAIDA": str(destino),
-        "YTV_PEDACO": str(PEDACO_BYTES),
-    }
-    resultado = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _SCRIPT_DOWNLOAD],
-        capture_output=True, text=True, env=ambiente,
-    )
-    if resultado.returncode != 0 or not destino.exists():
-        print(f"  falha ao baixar o vídeo: {resultado.stderr.strip().splitlines()[-1:]}")
-        return None
+        ambiente = {
+            **os.environ,
+            "YTV_URL": dados["url"],
+            "YTV_SAIDA": str(destino),
+            "YTV_PEDACO": str(PEDACO_BYTES),
+            "YTV_HEADERS": dados["headers"],
+        }
+        resultado = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _SCRIPT_DOWNLOAD],
+            capture_output=True, text=True, env=ambiente,
+        )
+        if resultado.returncode == 0 and destino.exists():
+            break
+
+        detalhe = next(
+            (l.strip() for l in resultado.stderr.splitlines() if l.strip()),
+            "sem detalhe",
+        )
+        if tentativa == 1:
+            print(f"  {detalhe}; esperando {ESPERA_ESTRANGULAMENTO}s e repetindo")
+            time.sleep(ESPERA_ESTRANGULAMENTO)
+            continue
+        return {"arquivo": None, "tem_audio": dados["tem_audio"],
+                "erro": f"download recusado ({detalhe})"}
 
     baixado = destino.stat().st_size
     # Download truncado gera quadros só do começo do vídeo, e isso passaria
     # despercebido: o ffmpeg extrai o que conseguiu ler sem reclamar.
-    if esperado and baixado < esperado:
-        print(f"  aviso: baixou {baixado} de {esperado} bytes (vídeo incompleto)")
-    return {"arquivo": destino, "tem_audio": dados["tem_audio"]}
+    if dados["tamanho"] and baixado < dados["tamanho"]:
+        print(f"  aviso: baixou {baixado} de {dados['tamanho']} bytes "
+              "(vídeo incompleto)")
+    return {"arquivo": destino, "tem_audio": dados["tem_audio"], "erro": None}
 
 
 # --------------------------------------------------------------------------
@@ -312,12 +359,17 @@ def baixar_legendas(urls: list[str], pasta: Path, proxy: str | None,
 
 
 # --------------------------------------------------------------------------
-# quadros dos vídeos sem legenda
+# quadros de vídeo
 # --------------------------------------------------------------------------
 
-def quadros_dos_sem_legenda(urls: list[str], destino: Path, proxy: str | None,
-                            temporaria: Path, intervalo: int = 4) -> int:
-    """Baixa cada vídeo sem legenda e extrai os quadros em `destino/quadros/`.
+def quadros_dos_videos(urls: list[str], destino: Path, proxy: str | None,
+                       temporaria: Path, intervalo: int = 4) -> int:
+    """Baixa cada vídeo da lista e extrai os quadros em `destino/quadros/`.
+
+    Serve para qualquer vídeo, não só o mudo. Vídeo de tela **com** narração
+    também precisa disto: a fala diz o porquê e a tela diz o literal — nome de
+    campo, comando digitado, qual aba. A legenda automática ainda erra jargão
+    (`x-factor-ccs` sai como "X Factor CCS"), e o quadro é o que corrige.
 
     Devolve quantos vídeos renderam quadros. O .mp4 fica na pasta temporária e
     morre com ela: o entregável é a imagem, e vídeo interno guardado a mais é
@@ -328,13 +380,17 @@ def quadros_dos_sem_legenda(urls: list[str], destino: Path, proxy: str | None,
         print("  instale com: winget install Gyan.FFmpeg")
         return 0
 
-    print(f"\nextraindo quadros de {len(urls)} vídeo(s) sem legenda:\n")
+    print(f"\nextraindo quadros de {len(urls)} vídeo(s):\n")
     prontos = 0
-    for url in urls:
+    for indice, url in enumerate(urls):
+        # pausa entre vídeos pelo mesmo motivo do --sleep-requests da legenda:
+        # em sequência, o googlevideo passa a recusar a partir do terceiro
+        if indice:
+            time.sleep(ESPERA_ESTRANGULAMENTO)
         video_id = url.split("v=")[-1]
         origem = baixar_video(url, temporaria / f"{video_id}.mp4", proxy)
-        if origem is None:
-            print(f"  {video_id}: sem formato de vídeo disponível")
+        if origem["arquivo"] is None:
+            print(f"  {video_id}: {origem['erro']}")
             continue
 
         relatorio = quadros.extrair_com_relatorio(
@@ -416,7 +472,7 @@ def main() -> None:
             for url in pendentes:
                 print(f"  {url}")
             if args.quadros:
-                com_quadros = quadros_dos_sem_legenda(
+                com_quadros = quadros_dos_videos(
                     pendentes, destino, proxy, pasta_vtt, args.intervalo_quadros
                 )
             else:
