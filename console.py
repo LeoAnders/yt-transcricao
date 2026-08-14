@@ -41,8 +41,20 @@ RAIZ = Path(__file__).resolve().parent
 # Os assets da interface ficam em `web/`, separados dos módulos Python: o que é
 # página não se mistura com o que é processo. A fronteira que importa, porém,
 # não é a pasta — é este módulo não decidir nada. Ver a docstring acima.
+# A interface é um projeto React/Vite normal, em `web/`. Este servidor serve o
+# resultado do `npm run build`; em desenvolvimento quem serve é o `npm run dev`,
+# que encaminha /api para cá (ver web/vite.config.js).
+#
+# `npm` funciona nesta rede — foi medido. O que **não** funciona é o `pip`, que
+# recebe 407 no proxy: é por isso que o lado Python continua sem dependência
+# nenhuma, e por isso os dois casos não devem ser tratados como o mesmo.
 WEB = RAIZ / "web"
-PAGINA = WEB / "console.html"
+DIST = WEB / "dist"
+PAGINA = DIST / "index.html"
+
+TIPOS = {".html": "text/html", ".js": "application/javascript",
+         ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json",
+         ".woff2": "font/woff2", ".png": "image/png", ".jpg": "image/jpeg"}
 
 # Trabalho em andamento, por id. Uma geração leva minutos: fazê-la dentro do
 # handler deixaria o navegador pendurado até o timeout. O trabalho vai para uma
@@ -223,12 +235,7 @@ class Manipulador(BaseHTTPRequestHandler):
 
         try:
             if rota.path in ("/", "/index.html"):
-                pagina = PAGINA.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(pagina)))
-                self.end_headers()
-                self.wfile.write(pagina)
+                self._estatico("index.html")
                 return
 
             if rota.path == "/api/documentos":
@@ -258,6 +265,11 @@ class Manipulador(BaseHTTPRequestHandler):
                 job = consulta.get("id", [""])[0]
                 with _TRAVA:
                     self._responder(_TRABALHOS.get(job) or {"estado": "desconhecido"})
+                return
+
+            # o que não é API é arquivo estático do build do Vite
+            if not rota.path.startswith("/api/"):
+                self._estatico(rota.path)
                 return
 
             self._responder({"erro": "rota desconhecida"}, 404)
@@ -330,6 +342,26 @@ class Manipulador(BaseHTTPRequestHandler):
 
     # ---------------- caminhos ----------------
 
+    def _estatico(self, relativo: str) -> None:
+        """Serve um arquivo do build da interface, e nada fora dele.
+
+        Mesma razão de `_arquivo`: sem a checagem, `/../.env` lê o token. Aqui
+        a base é outra, então a checagem também precisa ser.
+        """
+        base = DIST.resolve()
+        alvo = (base / relativo.lstrip("/")).resolve()
+        if not alvo.is_file() or base not in alvo.parents:
+            self._responder({"erro": f"não encontrado: {relativo}"}, 404)
+            return
+
+        dados = alvo.read_bytes()
+        tipo = TIPOS.get(alvo.suffix, "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", f"{tipo}; charset=utf-8")
+        self.send_header("Content-Length", str(len(dados)))
+        self.end_headers()
+        self.wfile.write(dados)
+
     def _arquivo(self, relativo: str) -> Path:
         """Resolve o caminho e recusa qualquer coisa fora da base.
 
@@ -367,7 +399,11 @@ def main() -> None:
     Manipulador.pasta_obsidian = args.obsidian
 
     if not PAGINA.is_file():
-        sys.exit(f"página não encontrada: {PAGINA}")
+        sys.exit(
+            f"interface não construída: {PAGINA} não existe.\n"
+            "  cd web && npm install && npm run build\n"
+            "  (ou `npm run dev`, que serve em 5173 e encaminha /api para cá)"
+        )
 
     # 127.0.0.1, nunca 0.0.0.0: sem autenticação, escutar na rede exporia o
     # conteúdo interno para qualquer máquina do escritório.

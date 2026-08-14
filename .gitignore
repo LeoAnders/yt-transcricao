@@ -12,3 +12,7 @@ quadros/
 
 __pycache__/
 *.pyc
+
+# interface: dependencias e build do Vite
+web/node_modules/
+web/dist/
