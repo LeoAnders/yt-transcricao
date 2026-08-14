@@ -45,10 +45,16 @@ PEDACO_BYTES = 8 * 1024 * 1024
 
 # O googlevideo estrangula por IP: medido em 2026-08-14, dois downloads
 # seguidos passam e o terceiro leva 403 — mesmo pedindo URL nova, o que
-# descarta URL expirada como causa. Quinze segundos de espera liberam. Daí a
-# pausa entre vídeos e a segunda tentativa; sem elas, processar um artigo com
-# vários vídeos falha a partir do terceiro.
-ESPERA_ESTRANGULAMENTO = 15
+# descarta URL expirada como causa.
+#
+# A janela cresce com o uso: recém-bloqueado, 15s liberam; depois de dezenas
+# de downloads seguidos, 15s não bastaram e 30s bastaram. Por isso a espera é
+# escalonada, e não fixa. São as esperas ENTRE tentativas, então há uma
+# tentativa a mais que o tamanho da tupla.
+ESPERAS_ESTRANGULAMENTO = (15, 45)
+
+# Pausa entre vídeos diferentes, mesma lógica do --sleep-requests da legenda.
+ESPERA_ENTRE_VIDEOS = 15
 
 # Resolução é o fator limitante para ler texto de terminal no quadro, então
 # pede-se o maior formato até 1080p. `avc1` primeiro porque é o codec que
@@ -235,9 +241,9 @@ def baixar_video(url: str, destino: Path, proxy: str | None) -> dict:
 
     O `tem_audio` é da ORIGEM, não do arquivo: baixa-se video-only.
     """
-    # Duas tentativas: a URL é reassinada a cada volta, então a segunda cobre
-    # tanto o estrangulamento por IP quanto uma assinatura recusada.
-    for tentativa in (1, 2):
+    # A URL é reassinada a cada volta, então repetir cobre tanto o
+    # estrangulamento por IP quanto uma assinatura recusada.
+    for tentativa in range(len(ESPERAS_ESTRANGULAMENTO) + 1):
         dados = dados_do_video(url, proxy)
         if not dados["url"]:
             return {"arquivo": None, "tem_audio": False,
@@ -261,12 +267,14 @@ def baixar_video(url: str, destino: Path, proxy: str | None) -> dict:
             (l.strip() for l in resultado.stderr.splitlines() if l.strip()),
             "sem detalhe",
         )
-        if tentativa == 1:
-            print(f"  {detalhe}; esperando {ESPERA_ESTRANGULAMENTO}s e repetindo")
-            time.sleep(ESPERA_ESTRANGULAMENTO)
+        if tentativa < len(ESPERAS_ESTRANGULAMENTO):
+            espera = ESPERAS_ESTRANGULAMENTO[tentativa]
+            print(f"  {detalhe}; esperando {espera}s e repetindo")
+            time.sleep(espera)
             continue
         return {"arquivo": None, "tem_audio": dados["tem_audio"],
-                "erro": f"download recusado ({detalhe})"}
+                "erro": f"download recusado após "
+                        f"{len(ESPERAS_ESTRANGULAMENTO) + 1} tentativas ({detalhe})"}
 
     baixado = destino.stat().st_size
     # Download truncado gera quadros só do começo do vídeo, e isso passaria
@@ -386,7 +394,7 @@ def quadros_dos_videos(urls: list[str], destino: Path, proxy: str | None,
         # pausa entre vídeos pelo mesmo motivo do --sleep-requests da legenda:
         # em sequência, o googlevideo passa a recusar a partir do terceiro
         if indice:
-            time.sleep(ESPERA_ESTRANGULAMENTO)
+            time.sleep(ESPERA_ENTRE_VIDEOS)
         video_id = url.split("v=")[-1]
         origem = baixar_video(url, temporaria / f"{video_id}.mp4", proxy)
         if origem["arquivo"] is None:
