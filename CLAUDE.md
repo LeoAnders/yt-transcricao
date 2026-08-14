@@ -23,10 +23,16 @@ o termo técnico é natural (`fetch`, `chunk`); o resto em português
 pip install <qualquer coisa>  →  407 Proxy Authentication Required
 ```
 
-O proxy corporativo exige autenticação integrada do Windows, e nem o `pip`
-nem o `npm` sabem fazê-la. Isso elimina de saída o SDK oficial do MCP, o
-`requests`, o `faster-whisper` e qualquer biblioteca. Só a biblioteca padrão
-do Python.
+O proxy corporativo exige autenticação integrada do Windows, e o `pip` não
+sabe fazê-la. Isso elimina de saída o SDK oficial do MCP, o `requests`, o
+`faster-whisper` e qualquer biblioteca. Só a biblioteca padrão do Python.
+
+**A restrição é do `pip`, não do `npm`.** Medido em 2026-08-14, nesta
+máquina: `pip download requests` recebe `407`, enquanto `npm install react`
+completa em menos de um segundo — o `npm` alcança o `registry.npmjs.org`
+sem proxy configurado. Os dois foram tratados como o mesmo caso por um
+tempo e não são. **Antes de descartar uma ferramenta por causa do proxy,
+teste-a**; a suposição custou uma interface reescrita à toa.
 
 Consequências que **não devem ser revertidas** sem resolver o proxy primeiro:
 
@@ -35,19 +41,17 @@ Consequências que **não devem ser revertidas** sem resolver o proxy primeiro:
   `powershell -Command Invoke-WebRequest -ProxyUseDefaultCredentials`, que é
   o único cliente na máquina que autentica sozinho;
 - o `yt-dlp.exe` é baixado avulso do GitHub, não instalado por pacote;
-- **a interface é React sem `npm` e sem empacotador.** As três bibliotecas
-  (`react`, `react-dom`, `htm`) são builds UMD baixadas avulsas na primeira
-  execução pelo `Invoke-WebRequest`, exatamente como o `yt-dlp.exe`, e ficam em
-  `web/vendor/`, fora do versionamento. **Nada de CDN**: a página não pode
-  depender de rede externa em runtime, porque trata conteúdo interno.
+- **a interface é um projeto React/Vite normal**, em `web/`, com `npm install`
+  e `npm run dev` — porque o `npm` funciona (ver acima). O lado Python é que
+  continua sem dependência nenhuma.
 
-  O `htm` é o que dispensa o Babel — dá sintaxe praticamente igual a JSX por
-  template literal, em 1,4 KB, interpretada pelo próprio navegador. Trocar por
-  `babel-standalone` "para usar JSX de verdade" custaria ~2 MB e uma
-  transpilação a cada carregamento; não fazer isso é decisão, não esquecimento.
+  Em desenvolvimento, o Vite serve em `5173` e encaminha `/api` para o
+  `console.py` em `8765`. Em produção, `npm run build` gera `web/dist/`, que o
+  próprio `console.py` serve — uma origem só, sem proxy no caminho.
 
   O `console.py` não decide nada — só chama `redigir` e `publicar` —, então
-  trocar a interface de novo não toca no motor.
+  trocar a interface não toca no motor. Quem recusa uma publicação é o
+  `publicar.py`, no servidor, porque interface se contorna.
 
 ## Estrutura
 
@@ -60,8 +64,9 @@ transcrever.py   Linha de comando: proxy, download, orquestração
 redigir.py       Transcrição + quadros → documento, pelo `claude` da máquina
 publicar.py      Destinos (Outline, Obsidian) e as travas de publicação
 console.py       Console local de revisão — HTTP da stdlib em 127.0.0.1
-web/             Interface em React: console.html, app.js, app.css
-web/vendor/      react, react-dom e htm — baixados avulsos, não versionados
+web/             Interface React/Vite: index.html, src/, vite.config.js
+web/src/         App, api.js, markdown.js e componentes/
+web/dist/        build do Vite — servido pelo console.py, não versionado
 mcp_server.py    Servidor MCP sobre os módulos acima
 ```
 
@@ -114,6 +119,11 @@ python redigir.py transcricoes/<artigo>    # transcrição → documento
 python publicar.py <arquivo.md> --base <url> --colecao <id>
 python publicar.py --base <url> --listar-colecoes   # leitura, para achar o id
 python console.py --outline <url>          # a interface, em 127.0.0.1:8765
+
+# interface (React/Vite) — a primeira vez precisa do install
+cd web && npm install
+cd web && npm run dev      # 5173, com recarga; encaminha /api para o 8765
+cd web && npm run build    # gera web/dist/, que o console.py serve
 
 # testar o MCP na mão
 Get-Content teste.jsonl | python mcp_server.py
