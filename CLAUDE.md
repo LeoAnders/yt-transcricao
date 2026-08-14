@@ -34,7 +34,13 @@ Consequências que **não devem ser revertidas** sem resolver o proxy primeiro:
 - downloads que precisam de credencial de proxy são feitos via
   `powershell -Command Invoke-WebRequest -ProxyUseDefaultCredentials`, que é
   o único cliente na máquina que autentica sozinho;
-- o `yt-dlp.exe` é baixado avulso do GitHub, não instalado por pacote.
+- o `yt-dlp.exe` é baixado avulso do GitHub, não instalado por pacote;
+- **a interface é HTML e JS puro, servida pelo `http.server` da biblioteca
+  padrão.** Não é preferência: React exige build, build exige `npm`, e `npm`
+  leva o mesmo `407`. Carregar framework por CDN também não serve — seria
+  dependência de rede externa num console que trata conteúdo interno. Se um dia
+  o proxy for resolvido, trocar a interface não toca no motor: o `console.py`
+  não decide nada, só chama `redigir` e `publicar`.
 
 ## Estrutura
 
@@ -44,6 +50,10 @@ limpar.py        Converte .vtt em Markdown — PURO, não conhece rede
 imagens.py       Baixa as imagens de um artigo do Outline
 quadros.py       Extrai quadros de vídeo via ffmpeg (para vídeo sem fala)
 transcrever.py   Linha de comando: proxy, download, orquestração
+redigir.py       Transcrição + quadros → documento, pelo `claude` da máquina
+publicar.py      Destinos (Outline, Obsidian) e as travas de publicação
+console.py       Console local de revisão — HTTP da stdlib em 127.0.0.1
+web/             Assets da interface (HTML/JS), separados dos módulos Python
 mcp_server.py    Servidor MCP sobre os módulos acima
 ```
 
@@ -91,6 +101,11 @@ python transcrever.py --outline <url> --quadros   # + imagens dos sem legenda
 python transcrever.py --texto arquivo.txt  # de qualquer texto colado
 python imagens.py <url-artigo>             # baixa as imagens do artigo
 python quadros.py video.mp4                # quadros de vídeo local sem fala
+
+python redigir.py transcricoes/<artigo>    # transcrição → documento
+python publicar.py <arquivo.md> --base <url> --colecao <id>
+python publicar.py --base <url> --listar-colecoes   # leitura, para achar o id
+python console.py --outline <url>          # a interface, em 127.0.0.1:8765
 
 # testar o MCP na mão
 Get-Content teste.jsonl | python mcp_server.py
