@@ -1,7 +1,14 @@
 # yt-transcricao
 
-Transforma vídeos de documentação em texto que uma IA consegue ler — pela
-legenda automática do YouTube, ou lendo a tela quando não há fala.
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white)
+![Dependências](https://img.shields.io/badge/depend%C3%AAncias-zero-2ea44f)
+![MCP](https://img.shields.io/badge/MCP-servidor%20stdio-000000)
+![Licença](https://img.shields.io/badge/licen%C3%A7a-privada-lightgrey)
+
+Transforma vídeos **e imagens** de documentação em texto que uma IA consegue
+ler — pela legenda automática do YouTube, lendo a tela quando não há fala, e
+baixando os prints que o texto não descreve.
 
 Funciona como ferramenta de linha de comando **e** como servidor MCP, para
 uma IA usar direto na conversa.
@@ -116,6 +123,31 @@ hospedado. Local é melhor aqui por três motivos concretos:
   modelo de vídeo diria "um terminal com texto branco", enquanto ler o quadro
   entrega o comando digitado e a resposta que apareceu.
 
+## Imagens da documentação
+
+```bash
+python imagens.py https://outline.suaempresa.com/doc/artigo-XXXX
+```
+
+Baixa os prints de tela do artigo em `imagens/<artigo>/`, cada um acompanhado
+do texto que o antecede no documento — sem esse contexto, uma pasta de PNGs
+não diz nada. Anexo que não é imagem (vídeo, PDF) é descartado.
+
+Documentação técnica coloca na figura justamente o que o texto não descreve.
+Casos reais encontrados neste acervo:
+
+- o texto diz "libere os endpoints no cadastro de usuário" e **não diz a
+  aba** — a imagem mostra que é a aba `Serviço`, não a `Segurança`;
+- o texto manda escrever `"deprecated" = true`, que é **JSON inválido** — a
+  imagem mostra o correto, `"deprecated": true`.
+
+No segundo caso a figura **contradiz** o texto. Uma base de conhecimento
+montada só com o Markdown herda o erro.
+
+> ⚠️ Print de tela vaza credencial. A primeira varredura aqui encontrou dois
+> tokens de API reais num único artigo. `imagens/`, `quadros/` e
+> `transcricoes/` estão no `.gitignore` — não remover.
+
 ## Uso — servidor MCP
 
 Registrar no Claude Code:
@@ -171,9 +203,13 @@ O token sai em **Outline → Settings → API Tokens**. O `.env` está no
 | --- | --- |
 | `descobrir.py` | acha vídeos em texto/página/Outline — extração **pura** |
 | `limpar.py` | converte `.vtt` em Markdown — **puro**, não conhece rede |
+| `imagens.py` | baixa os prints de tela de um artigo do Outline |
 | `quadros.py` | extrai quadros via ffmpeg |
 | `transcrever.py` | linha de comando, proxy, download |
 | `mcp_server.py` | servidor MCP sobre os módulos acima |
+
+Convenções do projeto em [CLAUDE.md](CLAUDE.md) e `.claude/rules/` — vale ler
+`seguranca.md` antes de mexer no que a ferramenta extrai.
 
 `descobrir.py` e `limpar.py` são testáveis sem internet: dê um texto, cobre
 os links; dê um `.vtt`, cobre o Markdown.
