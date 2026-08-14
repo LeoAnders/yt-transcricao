@@ -1,0 +1,11 @@
+# segredos
+.env
+
+# binário baixado sob demanda na primeira execução
+yt-dlp.exe
+
+# saída
+transcricoes/
+
+__pycache__/
+*.pyc
