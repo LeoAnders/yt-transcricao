@@ -12,3 +12,6 @@ quadros/
 
 __pycache__/
 *.pyc
+
+# bibliotecas da interface, baixadas sob demanda na primeira execucao
+web/vendor/

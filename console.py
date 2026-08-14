@@ -43,12 +43,70 @@ RAIZ = Path(__file__).resolve().parent
 # não é a pasta — é este módulo não decidir nada. Ver a docstring acima.
 WEB = RAIZ / "web"
 PAGINA = WEB / "console.html"
+VENDOR = WEB / "vendor"
+
+# React sem `npm`, pelo mesmo caminho do yt-dlp.exe: arquivo avulso baixado na
+# primeira execução, fora do versionamento. São builds UMD, que expõem globais
+# e dispensam empacotador.
+#
+# O `htm` é o que torna isso viável sem Babel: dá sintaxe praticamente igual a
+# JSX usando template literal, em 1,4 KB. Com Babel seriam ~2 MB e uma
+# transpilação a cada carregamento da página. Trocar `htm` por Babel "para
+# poder usar JSX de verdade" é justamente o caminho que este comentário existe
+# para evitar.
+BIBLIOTECAS = {
+    "react.js": "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
+    "react-dom.js": "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
+    "htm.js": "https://unpkg.com/htm@3.1.1/dist/htm.umd.js",
+}
+
+TIPOS = {".html": "text/html", ".js": "application/javascript",
+         ".css": "text/css", ".svg": "image/svg+xml"}
 
 # Trabalho em andamento, por id. Uma geração leva minutos: fazê-la dentro do
 # handler deixaria o navegador pendurado até o timeout. O trabalho vai para uma
 # thread e a página pergunta o estado.
 _TRABALHOS: dict[str, dict] = {}
 _TRAVA = threading.Lock()
+
+
+# --------------------------------------------------------------------------
+# bibliotecas da interface
+# --------------------------------------------------------------------------
+
+
+def garantir_bibliotecas(silencioso: bool = False) -> None:
+    """Baixa React, ReactDOM e htm na primeira execução.
+
+    Usa o PowerShell pelo mesmo motivo de `transcrever.garantir_ytdlp`: o proxy
+    corporativo exige autenticação integrada do Windows, que o urllib do Python
+    não sabe fazer e o Invoke-WebRequest sabe.
+    """
+    VENDOR.mkdir(parents=True, exist_ok=True)
+    faltando = {n: u for n, u in BIBLIOTECAS.items() if not (VENDOR / n).exists()}
+    if not faltando:
+        return
+
+    if not silencioso:
+        print(f"baixando {len(faltando)} biblioteca(s) da interface...")
+
+    for nome, url in faltando.items():
+        alvo = VENDOR / nome
+        script = (
+            f"$u='{url}'; $o='{alvo}'; "
+            "try { Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing } "
+            "catch { Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing "
+            "-Proxy ([System.Net.WebRequest]::DefaultWebProxy.GetProxy($u)) "
+            "-ProxyUseDefaultCredentials }"
+        )
+        resultado = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True,
+        )
+        if resultado.returncode != 0 or not alvo.exists():
+            sys.exit(f"falha ao baixar {nome}:\n{resultado.stderr.strip()}")
+        if not silencioso:
+            print(f"  {nome} ({alvo.stat().st_size // 1024} KB)")
 
 
 # --------------------------------------------------------------------------
@@ -223,12 +281,7 @@ class Manipulador(BaseHTTPRequestHandler):
 
         try:
             if rota.path in ("/", "/index.html"):
-                pagina = PAGINA.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(pagina)))
-                self.end_headers()
-                self.wfile.write(pagina)
+                self._estatico("console.html")
                 return
 
             if rota.path == "/api/documentos":
@@ -258,6 +311,11 @@ class Manipulador(BaseHTTPRequestHandler):
                 job = consulta.get("id", [""])[0]
                 with _TRAVA:
                     self._responder(_TRABALHOS.get(job) or {"estado": "desconhecido"})
+                return
+
+            # o que não é API é arquivo de `web/`: app.js, app.css, vendor/*
+            if not rota.path.startswith("/api/"):
+                self._estatico(rota.path)
                 return
 
             self._responder({"erro": "rota desconhecida"}, 404)
@@ -330,6 +388,26 @@ class Manipulador(BaseHTTPRequestHandler):
 
     # ---------------- caminhos ----------------
 
+    def _estatico(self, relativo: str) -> None:
+        """Serve um arquivo de `web/`, e nada fora dela.
+
+        Mesma razão de `_arquivo`: sem a checagem, `/../.env` lê o token. Aqui
+        a base é outra, então a checagem também precisa ser.
+        """
+        base = WEB.resolve()
+        alvo = (base / relativo.lstrip("/")).resolve()
+        if not alvo.is_file() or base not in alvo.parents:
+            self._responder({"erro": f"não encontrado: {relativo}"}, 404)
+            return
+
+        dados = alvo.read_bytes()
+        tipo = TIPOS.get(alvo.suffix, "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", f"{tipo}; charset=utf-8")
+        self.send_header("Content-Length", str(len(dados)))
+        self.end_headers()
+        self.wfile.write(dados)
+
     def _arquivo(self, relativo: str) -> Path:
         """Resolve o caminho e recusa qualquer coisa fora da base.
 
@@ -368,6 +446,8 @@ def main() -> None:
 
     if not PAGINA.is_file():
         sys.exit(f"página não encontrada: {PAGINA}")
+
+    garantir_bibliotecas()
 
     # 127.0.0.1, nunca 0.0.0.0: sem autenticação, escutar na rede exporia o
     # conteúdo interno para qualquer máquina do escritório.
