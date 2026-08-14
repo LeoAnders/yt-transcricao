@@ -148,20 +148,36 @@ def de_pagina(url: str) -> list[str]:
 def ler_env(chave: str) -> str | None:
     """Lê do ambiente ou do .env ao lado do script. Sem biblioteca externa:
     instalar pacote depende do proxy, que nem sempre autentica."""
-    if os.environ.get(chave):
-        return os.environ[chave]
+    for nome in _nomes_aceitos(chave):
+        if os.environ.get(nome):
+            return os.environ[nome]
 
     env = RAIZ / ".env"
     if not env.exists():
         return None
+
+    aceitos = _nomes_aceitos(chave)
     for linha in env.read_text(encoding="utf-8").splitlines():
         linha = linha.strip()
         if not linha or linha.startswith("#") or "=" not in linha:
             continue
         nome, _, valor = linha.partition("=")
-        if nome.strip() == chave:
+        if nome.strip() in aceitos:
             return valor.strip().strip('"').strip("'")
     return None
+
+
+# O MCP do Outline configurado nesta máquina usa OUTLINE_API_KEY. Aceitar os
+# dois nomes evita pedir que o mesmo segredo seja duplicado num .env só porque
+# a ferramenta escolheu outro nome.
+SINONIMOS = {
+    "OUTLINE_API_TOKEN": ("OUTLINE_API_TOKEN", "OUTLINE_API_KEY"),
+    "OUTLINE_API_KEY": ("OUTLINE_API_KEY", "OUTLINE_API_TOKEN"),
+}
+
+
+def _nomes_aceitos(chave: str) -> tuple[str, ...]:
+    return SINONIMOS.get(chave, (chave,))
 
 
 def documento_outline(url_doc: str) -> tuple[str, str]:
