@@ -35,12 +35,19 @@ Consequências que **não devem ser revertidas** sem resolver o proxy primeiro:
   `powershell -Command Invoke-WebRequest -ProxyUseDefaultCredentials`, que é
   o único cliente na máquina que autentica sozinho;
 - o `yt-dlp.exe` é baixado avulso do GitHub, não instalado por pacote;
-- **a interface é HTML e JS puro, servida pelo `http.server` da biblioteca
-  padrão.** Não é preferência: React exige build, build exige `npm`, e `npm`
-  leva o mesmo `407`. Carregar framework por CDN também não serve — seria
-  dependência de rede externa num console que trata conteúdo interno. Se um dia
-  o proxy for resolvido, trocar a interface não toca no motor: o `console.py`
-  não decide nada, só chama `redigir` e `publicar`.
+- **a interface é React sem `npm` e sem empacotador.** As três bibliotecas
+  (`react`, `react-dom`, `htm`) são builds UMD baixadas avulsas na primeira
+  execução pelo `Invoke-WebRequest`, exatamente como o `yt-dlp.exe`, e ficam em
+  `web/vendor/`, fora do versionamento. **Nada de CDN**: a página não pode
+  depender de rede externa em runtime, porque trata conteúdo interno.
+
+  O `htm` é o que dispensa o Babel — dá sintaxe praticamente igual a JSX por
+  template literal, em 1,4 KB, interpretada pelo próprio navegador. Trocar por
+  `babel-standalone` "para usar JSX de verdade" custaria ~2 MB e uma
+  transpilação a cada carregamento; não fazer isso é decisão, não esquecimento.
+
+  O `console.py` não decide nada — só chama `redigir` e `publicar` —, então
+  trocar a interface de novo não toca no motor.
 
 ## Estrutura
 
@@ -53,7 +60,8 @@ transcrever.py   Linha de comando: proxy, download, orquestração
 redigir.py       Transcrição + quadros → documento, pelo `claude` da máquina
 publicar.py      Destinos (Outline, Obsidian) e as travas de publicação
 console.py       Console local de revisão — HTTP da stdlib em 127.0.0.1
-web/             Assets da interface (HTML/JS), separados dos módulos Python
+web/             Interface em React: console.html, app.js, app.css
+web/vendor/      react, react-dom e htm — baixados avulsos, não versionados
 mcp_server.py    Servidor MCP sobre os módulos acima
 ```
 
