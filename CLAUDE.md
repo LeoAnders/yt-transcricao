@@ -145,6 +145,8 @@ em `.claude/rules/estilo-codigo.md`.
 Consultar antes de desenvolver:
 
 - `.claude/rules/commits.md` — padrão de commits
+- `.claude/rules/taskmaster.md` — o backlog e o fluxo de uma tarefa até o
+  merge; **uma tarefa é um PR**, que é a mesma regra do `commits.md`
 - `.claude/rules/estilo-codigo.md` — estilo e verificação antes de commitar
 - `.claude/rules/seguranca.md` — **obrigatório**: o conteúdo extraído já
   continha tokens de API reais
@@ -155,3 +157,7 @@ Consultar antes de desenvolver:
   artigo de documentação em conhecimento utilizável, incluindo a curadoria
 - `.claude/skills/auditar-imagens/` — varredura de vazamento de credencial
   em print de tela
+
+## Task Master AI Instructions
+**Import Task Master's development workflow commands and guidelines, treat as if import is in the main CLAUDE.md file.**
+@./.taskmaster/CLAUDE.md

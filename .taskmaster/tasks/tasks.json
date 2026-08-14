@@ -1,0 +1,120 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 1,
+        "title": "Validar o fluxo completo num artigo real do Outline",
+        "description": "Rodar transcrever, redigir, revisar e publicar num artigo de verdade (o de 19 videos), medindo custo e tempo. E o teste real da trava de credencial, que so foi exercitada com pendencia sintetica.",
+        "details": "Rodar pelo console em 127.0.0.1:8765. Anotar: tempo total, numero de chamadas ao claude, custo, quantos assuntos sairam do agrupamento, e se alguma pendencia bloqueante apareceu. Se aparecer credencial de verdade, seguir .claude/rules/seguranca.md: avisar sem reproduzir o valor. Publicar como rascunho na colecao Parquinho da Cuka. Isto e validacao, nao codigo: a saida e um relato do que incomodou, que vira as proximas tarefas.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 2,
+        "title": "Conferir a interface React num navegador real",
+        "description": "A interface nunca foi aberta num navegador. Os componentes foram renderizados fora dele, o que prova que a arvore monta, mas nao prova layout, interacao nem o polling da geracao.",
+        "details": "Subir python console.py --outline https://cuka.consistem.com.br e cd web e npm run dev. Conferir em 5173: colar link e analisar, marcar quadros e gerar acompanhando o log ao vivo, escolher documento na lista, resolver pendencia, trocar destino entre Outline e Obsidian, e publicar. Conferir tambem o layout estreito (a lista vira coluna unica abaixo de 940px).",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 3,
+        "title": "Mostrar quadros e prints na tela de revisao",
+        "description": "O maior buraco funcional: o documento cita o instante em texto (00:04:18) mas a imagem nao aparece. Quem revisa video sem fala revisa no escuro, que e justamente onde o quadro e a unica fonte.",
+        "details": "Tres partes. 1) redigir.py: a regra REGRAS_REDIGIR passa a mandar embutir a imagem em markdown apontando para o quadro, alem de citar o instante. 2) console.py: rota /midia servindo de transcricoes/, com a mesma checagem de caminho de _arquivo e _estatico, senao vira leitura arbitraria de disco. 3) interface: renderizar a imagem no corpo e dar um botao Ver o quadro na pendencia bloqueante de credencial, que hoje nao existe. Verificar que a trava de caminho recusa ../../.env pela nova rota.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          2
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 4,
+        "title": "Enriquecer a descoberta com metadados por video",
+        "description": "Hoje /api/analisar devolve so titulo e numero de videos. O prototipo prometia duracao somada, quantos tem legenda, quantos sao mudos e quantas imagens o artigo tem — e esse numero e o que convence quem ve a demo.",
+        "details": "Custa uma consulta de metadados por video via yt-dlp, entao o analisar deixa de ser instantaneo: mostrar progresso ou fazer em segundo plano como a geracao ja faz. A interface ja tem o componente de contagem (counts) pronto para receber. Cuidado com o estrangulamento do googlevideo: transcrever.py ja espera entre videos por esse motivo.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          1
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 5,
+        "title": "Tela de Conexoes na interface",
+        "description": "Configurar hoje e passar --outline e --obsidian na linha de comando. Para voce serve; para quem nao vive no terminal, nao.",
+        "details": "Tela mostrando o que esta ligado: o motor (claude, ffmpeg, yt-dlp), a entrada (link colado e artigo autenticado) e os destinos. Respeitar a assimetria decidida no design: a entrada tem duas formas e nao cresce, a lista que cresce e a de destinos. Precisa de rota GET /api/conexoes no console.py. Nao expor valor de token: so presenca, conforme .claude/rules/seguranca.md.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          2
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 6,
+        "title": "Destino Notion",
+        "description": "Sub-projeto 2. O Notion tem a mesma forma do Outline nos dois lados: serve de entrada (pagina com video embutido e anexo) e de destino.",
+        "details": "Implementar DestinoNotion em publicar.py seguindo o Protocol Destino, com externo=False. A conversao e de Markdown para os blocos da API, que e onde mora o trabalho. Token por variavel de ambiente, nunca em arquivo novo — .claude/rules/seguranca.md prefere reusar a variavel que ja existe. Registrar na tela de Conexoes se a tarefa 5 ja estiver pronta.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 7,
+        "title": "Destino Redmine em Textile",
+        "description": "Sub-projeto 2. Wiki do projeto no Redmine. E o caso que forca a abstracao a lidar com conversao de formato de verdade, porque Redmine usa Textile e nao Markdown.",
+        "details": "DestinoRedmine em publicar.py, externo=False. Atencao: as tools de wiki do MCP do Redmine que foram vistas sao de leitura (read_wiki_page, list_wiki_pages); escrita em wiki precisa ser confirmada na API REST antes de assumir que da. Se nao der, dizer isso em vez de improvisar.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 8,
+        "title": "Destinos externos: GitBook e WordPress",
+        "description": "Sub-projeto 2, os dois destinos de fora da empresa. E aqui que a trava de origem deixa de ser teoria.",
+        "details": "Ambos com externo=True, o que faz publicar() recusar qualquer artigo com interno: true no front-matter. Testar essa recusa explicitamente, com material interno e com material gerado com --publico. WordPress e o mais distante do Outline: HTML em vez de Markdown, e upload de midia por endpoint separado.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          7
+        ],
+        "priority": "low",
+        "subtasks": []
+      },
+      {
+        "id": 9,
+        "title": "Atualizar o README com o fluxo novo",
+        "description": "O README ainda descreve so a extracao. Nao menciona redigir, publicar nem o console — que sao metade da ferramenta hoje.",
+        "details": "Documentar o fluxo completo (link, gerar, revisar, publicar), os dois modos da interface (npm run dev em 5173 e npm run build servido pelo console), e o pre-requisito de npm install em web/. Manter o tom do README atual, que explica por que existe antes de dizer o que faz. Nao versionar exemplo de conteudo extraido.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          3
+        ],
+        "priority": "low",
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "created": "2026-08-14T00:00:00.000Z",
+      "updated": "2026-08-14T20:09:24.917Z",
+      "description": "Backlog do yt-transcricao"
+    }
+  }
+}
