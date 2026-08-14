@@ -97,6 +97,8 @@ player em vez de linkar.
 | `--sem-timestamps` | texto corrido, melhor para resumir |
 | `--sem-fallback` | não tenta outro idioma quando o pedido não existe |
 | `--sem-proxy` | ignora o proxy configurado no Windows |
+| `--quadros` | para os vídeos **sem legenda**, baixa e vira imagens |
+| `--intervalo-quadros N` | segundos entre quadros (padrão: `4`) |
 
 ## Vídeo sem fala
 
@@ -105,12 +107,23 @@ gera legenda porque não há o que transcrever. Mas a informação está escrita
 na tela.
 
 ```bash
+# arquivo de vídeo que você já tem em disco
 python quadros.py video.mp4 --intervalo 4
+
+# ou direto do YouTube: transcreve o que tem legenda e vira imagem o resto
+python transcrever.py --outline <url-do-artigo> --quadros
 ```
 
 Corta o vídeo em imagens (com upscale, porque gravação de tela costuma vir
 pequena e o texto de terminal fica ilegível) e lista o instante de cada uma.
 **Quem lê as imagens é a IA** — não há OCR nem modelo de vídeo envolvido.
+
+Com `--quadros`, os vídeos que ficaram sem legenda são baixados e cortados em
+`<saida>/quadros/<id-do-video>/`. O `.mp4` vive numa pasta temporária e é
+descartado no fim: o entregável é a imagem, e vídeo interno guardado a mais é
+superfície de vazamento. Quando o vídeo **tem** áudio mas não tem legenda, a
+saída avisa — pode ser só legenda que o YouTube ainda não gerou, e aí a
+transcrição volta a ser o caminho melhor.
 
 A alternativa seria mandar o vídeo para um serviço de compreensão de vídeo
 hospedado. Local é melhor aqui por três motivos concretos:
