@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 
 import descobrir
+import imagens
 import limpar
 import quadros
 import transcrever
@@ -94,6 +95,59 @@ FERRAMENTAS = [
             "properties": {
                 "url_artigo": {"type": "string", "description": "URL do artigo no Outline"},
                 "idioma": {"type": "string", "description": "código do idioma (padrão: pt)"},
+                "quadros": {
+                    "type": "string",
+                    "enum": ["nao", "sem-legenda", "todos"],
+                    "description": (
+                        "extrair quadros também: 'nao', 'sem-legenda' (padrão, só "
+                        "os que não têm legenda) ou 'todos' (baixa todo vídeo do "
+                        "artigo — mais lento, mas é o que captura o que está "
+                        "escrito na tela dos vídeos narrados)"
+                    ),
+                },
+                "intervalo_quadros": {
+                    "type": "integer",
+                    "description": "segundos entre quadros (padrão: 4)",
+                },
+            },
+            "required": ["url_artigo"],
+        },
+    },
+    {
+        "name": "quadros_do_video",
+        "description": (
+            "Corta um vídeo do YouTube em imagens e devolve os caminhos. Recebe "
+            "URL ou ID — baixa o vídeo sozinho. Use SEMPRE que precisar do que "
+            "está escrito na tela: nome exato de campo, comando digitado, qual "
+            "aba. Vale também para vídeo COM fala, porque a legenda erra jargão "
+            "técnico e a tela mostra o literal. Leia as imagens depois."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video": {"type": "string", "description": "URL ou ID do vídeo"},
+                "intervalo_segundos": {
+                    "type": "integer",
+                    "description": "segundos entre quadros (padrão: 4)",
+                },
+                "pasta_saida": {"type": "string", "description": "onde gravar"},
+            },
+            "required": ["video"],
+        },
+    },
+    {
+        "name": "imagens_do_artigo",
+        "description": (
+            "Baixa os prints de tela de um artigo do Outline, cada um com o texto "
+            "que o antecede no documento. Documentação técnica põe na figura o "
+            "que o texto não descreve — e às vezes a figura contradiz o texto. "
+            "Devolve os caminhos; leia as imagens depois. Exige OUTLINE_API_TOKEN."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url_artigo": {"type": "string", "description": "URL do artigo no Outline"},
+                "pasta_saida": {"type": "string", "description": "onde gravar"},
             },
             "required": ["url_artigo"],
         },
@@ -101,10 +155,8 @@ FERRAMENTAS = [
     {
         "name": "extrair_quadros",
         "description": (
-            "Para vídeo SEM FALA (captura de tela, demonstração muda), onde não "
-            "existe legenda: corta o vídeo em imagens com ffmpeg e devolve os "
-            "caminhos. Leia as imagens para saber o que está escrito na tela. "
-            "Recebe um arquivo de vídeo local, não uma URL."
+            "Corta um arquivo de vídeo LOCAL em imagens. Para vídeo do YouTube "
+            "use quadros_do_video, que baixa sozinho."
         ),
         "inputSchema": {
             "type": "object",
@@ -130,6 +182,18 @@ def _proxy() -> str | None:
     return transcrever.detectar_proxy()
 
 
+def _pasta(pedida: str | None, padrao: Path) -> Path:
+    """Resolve a pasta de saída para caminho ABSOLUTO.
+
+    Quem lê o resultado é outro processo, com diretório de trabalho próprio —
+    devolver caminho relativo faz a imagem "não existir" do outro lado.
+    """
+    if not pedida:
+        return padrao
+    caminho = Path(pedida)
+    return caminho if caminho.is_absolute() else RAIZ / caminho
+
+
 def obter_transcricao(video: str, idioma: str = "pt",
                       com_timestamps: bool = True) -> str:
     urls = descobrir.normalizar([video])
@@ -142,8 +206,8 @@ def obter_transcricao(video: str, idioma: str = "pt",
         if pendentes:
             return (
                 f"{urls[0]} não tem legenda automática em nenhum idioma.\n"
-                "Vídeo sem fala não gera legenda — se for captura de tela, "
-                "baixe o arquivo e use extrair_quadros."
+                "Vídeo sem fala não gera legenda — use quadros_do_video para "
+                "ler o que está escrito na tela."
             )
 
         vtt = next(iter(sorted(pasta.glob("*.vtt"))))
@@ -200,7 +264,15 @@ def listar_videos_do_artigo(url_artigo: str) -> str:
     return "\n".join(linhas)
 
 
-def transcrever_artigo(url_artigo: str, idioma: str = "pt") -> str:
+def transcrever_artigo(url_artigo: str, idioma: str = "pt",
+                       quadros: str = "sem-legenda",
+                       intervalo_quadros: int = 4) -> str:
+    # `quadros` sombreia o módulo de mesmo nome dentro desta função. É de
+    # propósito — o nome certo para o parâmetro do MCP é esse —, e não
+    # atrapalha porque a extração aqui é chamada via `transcrever`.
+    if quadros not in ("nao", "sem-legenda", "todos"):
+        return "quadros deve ser 'nao', 'sem-legenda' ou 'todos'."
+
     titulo, texto = descobrir.documento_outline(url_artigo)
     urls = descobrir.urls_em_texto(texto)
     if not urls:
@@ -222,6 +294,13 @@ def transcrever_artigo(url_artigo: str, idioma: str = "pt") -> str:
             total += palavras
             resultados.append((palavras, arquivo))
 
+        alvos = {"nao": [], "sem-legenda": pendentes, "todos": urls}[quadros]
+        com_quadros = 0
+        if alvos:
+            com_quadros = transcrever.quadros_dos_videos(
+                alvos, destino, _proxy(), pasta, intervalo_quadros
+            )
+
     linhas = [
         f'artigo "{titulo}": {len(resultados)} de {len(urls)} vídeo(s) transcritos, '
         f"{total} palavras.\n",
@@ -231,12 +310,89 @@ def transcrever_artigo(url_artigo: str, idioma: str = "pt") -> str:
         linhas.append(f"- {palavras:>6} palavras  {arquivo.name}")
 
     if pendentes:
-        linhas.append(f"\nsem legenda ({len(pendentes)}) — provavelmente sem fala:")
+        linhas.append(f"\nsem legenda ({len(pendentes)}):")
         linhas += [f"- {u}" for u in pendentes]
+
+    if com_quadros:
+        linhas.append(
+            f"\n{com_quadros} vídeo(s) em quadros: {destino / 'quadros'}\n"
+            "Leia as imagens — é onde está o que a fala não soletra."
+        )
+    elif quadros == "sem-legenda" and pendentes:
+        linhas.append("\n(quadros não extraídos — ffmpeg indisponível?)")
 
     linhas.append(
         "\nO texto não vem nesta resposta de propósito (estouraria o contexto). "
         "Leia o arquivo que interessar."
+    )
+    return "\n".join(linhas)
+
+
+def quadros_do_video(video: str, intervalo_segundos: int = 4,
+                     pasta_saida: str | None = None) -> str:
+    urls = descobrir.normalizar([video])
+    if not urls:
+        return f"não reconheci '{video}' como vídeo do YouTube."
+    if not quadros.ffmpeg_disponivel():
+        return ("ffmpeg não encontrado no PATH.\n"
+                "instale com: winget install Gyan.FFmpeg")
+
+    url = urls[0]
+    video_id = url.split("v=")[-1]
+    destino = _pasta(pasta_saida, RAIZ / "quadros" / video_id)
+
+    # o .mp4 morre com a pasta temporária: o entregável é a imagem
+    with tempfile.TemporaryDirectory() as tmp:
+        origem = transcrever.baixar_video(
+            url, Path(tmp) / f"{video_id}.mp4", _proxy()
+        )
+        if origem["arquivo"] is None:
+            return f"não consegui baixar {url}: {origem['erro']}"
+        relatorio = quadros.extrair_com_relatorio(
+            origem["arquivo"], destino, intervalo_segundos
+        )
+        tem_audio = origem["tem_audio"]
+
+    linhas = [
+        f"{url} — {len(relatorio['quadros'])} quadro(s) a cada "
+        f"{intervalo_segundos}s, áudio na origem: "
+        f"{'sim' if tem_audio else 'NÃO (vídeo mudo)'}\n",
+    ]
+    for quadro in relatorio["quadros"]:
+        linhas.append(f"- ({quadro['instante']}) {quadro['arquivo']}")
+
+    if tem_audio:
+        linhas.append(
+            "\nO vídeo tem fala: use obter_transcricao junto. A fala diz o "
+            "porquê, o quadro diz o literal — e a legenda automática erra "
+            "jargão técnico, então o quadro é o que corrige."
+        )
+    else:
+        linhas.append("\nLeia as imagens para saber o que está escrito na tela.")
+    return "\n".join(linhas)
+
+
+def imagens_do_artigo(url_artigo: str, pasta_saida: str | None = None) -> str:
+    relatorio = imagens.do_artigo(
+        url_artigo, _pasta(pasta_saida, None) if pasta_saida else None
+    )
+    baixadas = [i for i in relatorio["imagens"] if i.get("arquivo")]
+    if not baixadas:
+        return f'artigo "{relatorio["titulo"]}" não tem imagens.'
+
+    linhas = [
+        f'artigo "{relatorio["titulo"]}" — {len(baixadas)} imagem(ns)',
+        f"pasta: {relatorio['pasta']}\n",
+    ]
+    for imagem in baixadas:
+        linhas.append(f"- {imagem['arquivo']}")
+        # o contexto é o que transforma "imagem 3" na figura que ilustra X
+        if imagem["contexto_anterior"]:
+            linhas.append(f"    contexto: {imagem['contexto_anterior'][:120]}")
+
+    linhas.append(
+        "\nLeia as imagens. A figura costuma trazer o que o texto não diz — e "
+        "às vezes o contradiz."
     )
     return "\n".join(linhas)
 
@@ -247,7 +403,7 @@ def extrair_quadros(caminho_video: str, intervalo_segundos: int = 4,
     if not video.exists():
         return f"arquivo não encontrado: {video}"
 
-    destino = Path(pasta_saida) if pasta_saida else video.parent / "quadros"
+    destino = _pasta(pasta_saida, video.parent / "quadros")
     relatorio = quadros.extrair_com_relatorio(video, destino, intervalo_segundos)
 
     linhas = [
@@ -267,6 +423,8 @@ EXECUTORES = {
     "extrair_videos": extrair_videos,
     "listar_videos_do_artigo": listar_videos_do_artigo,
     "transcrever_artigo": transcrever_artigo,
+    "quadros_do_video": quadros_do_video,
+    "imagens_do_artigo": imagens_do_artigo,
     "extrair_quadros": extrair_quadros,
 }
 
