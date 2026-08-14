@@ -13,5 +13,6 @@ quadros/
 __pycache__/
 *.pyc
 
-# bibliotecas da interface, baixadas sob demanda na primeira execucao
-web/vendor/
+# interface: dependencias e build do Vite
+web/node_modules/
+web/dist/

@@ -41,72 +41,26 @@ RAIZ = Path(__file__).resolve().parent
 # Os assets da interface ficam em `web/`, separados dos módulos Python: o que é
 # página não se mistura com o que é processo. A fronteira que importa, porém,
 # não é a pasta — é este módulo não decidir nada. Ver a docstring acima.
-WEB = RAIZ / "web"
-PAGINA = WEB / "console.html"
-VENDOR = WEB / "vendor"
-
-# React sem `npm`, pelo mesmo caminho do yt-dlp.exe: arquivo avulso baixado na
-# primeira execução, fora do versionamento. São builds UMD, que expõem globais
-# e dispensam empacotador.
+# A interface é um projeto React/Vite normal, em `web/`. Este servidor serve o
+# resultado do `npm run build`; em desenvolvimento quem serve é o `npm run dev`,
+# que encaminha /api para cá (ver web/vite.config.js).
 #
-# O `htm` é o que torna isso viável sem Babel: dá sintaxe praticamente igual a
-# JSX usando template literal, em 1,4 KB. Com Babel seriam ~2 MB e uma
-# transpilação a cada carregamento da página. Trocar `htm` por Babel "para
-# poder usar JSX de verdade" é justamente o caminho que este comentário existe
-# para evitar.
-BIBLIOTECAS = {
-    "react.js": "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
-    "react-dom.js": "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
-    "htm.js": "https://unpkg.com/htm@3.1.1/dist/htm.umd.js",
-}
+# `npm` funciona nesta rede — foi medido. O que **não** funciona é o `pip`, que
+# recebe 407 no proxy: é por isso que o lado Python continua sem dependência
+# nenhuma, e por isso os dois casos não devem ser tratados como o mesmo.
+WEB = RAIZ / "web"
+DIST = WEB / "dist"
+PAGINA = DIST / "index.html"
 
 TIPOS = {".html": "text/html", ".js": "application/javascript",
-         ".css": "text/css", ".svg": "image/svg+xml"}
+         ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json",
+         ".woff2": "font/woff2", ".png": "image/png", ".jpg": "image/jpeg"}
 
 # Trabalho em andamento, por id. Uma geração leva minutos: fazê-la dentro do
 # handler deixaria o navegador pendurado até o timeout. O trabalho vai para uma
 # thread e a página pergunta o estado.
 _TRABALHOS: dict[str, dict] = {}
 _TRAVA = threading.Lock()
-
-
-# --------------------------------------------------------------------------
-# bibliotecas da interface
-# --------------------------------------------------------------------------
-
-
-def garantir_bibliotecas(silencioso: bool = False) -> None:
-    """Baixa React, ReactDOM e htm na primeira execução.
-
-    Usa o PowerShell pelo mesmo motivo de `transcrever.garantir_ytdlp`: o proxy
-    corporativo exige autenticação integrada do Windows, que o urllib do Python
-    não sabe fazer e o Invoke-WebRequest sabe.
-    """
-    VENDOR.mkdir(parents=True, exist_ok=True)
-    faltando = {n: u for n, u in BIBLIOTECAS.items() if not (VENDOR / n).exists()}
-    if not faltando:
-        return
-
-    if not silencioso:
-        print(f"baixando {len(faltando)} biblioteca(s) da interface...")
-
-    for nome, url in faltando.items():
-        alvo = VENDOR / nome
-        script = (
-            f"$u='{url}'; $o='{alvo}'; "
-            "try { Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing } "
-            "catch { Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing "
-            "-Proxy ([System.Net.WebRequest]::DefaultWebProxy.GetProxy($u)) "
-            "-ProxyUseDefaultCredentials }"
-        )
-        resultado = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, text=True,
-        )
-        if resultado.returncode != 0 or not alvo.exists():
-            sys.exit(f"falha ao baixar {nome}:\n{resultado.stderr.strip()}")
-        if not silencioso:
-            print(f"  {nome} ({alvo.stat().st_size // 1024} KB)")
 
 
 # --------------------------------------------------------------------------
@@ -281,7 +235,7 @@ class Manipulador(BaseHTTPRequestHandler):
 
         try:
             if rota.path in ("/", "/index.html"):
-                self._estatico("console.html")
+                self._estatico("index.html")
                 return
 
             if rota.path == "/api/documentos":
@@ -313,7 +267,7 @@ class Manipulador(BaseHTTPRequestHandler):
                     self._responder(_TRABALHOS.get(job) or {"estado": "desconhecido"})
                 return
 
-            # o que não é API é arquivo de `web/`: app.js, app.css, vendor/*
+            # o que não é API é arquivo estático do build do Vite
             if not rota.path.startswith("/api/"):
                 self._estatico(rota.path)
                 return
@@ -389,12 +343,12 @@ class Manipulador(BaseHTTPRequestHandler):
     # ---------------- caminhos ----------------
 
     def _estatico(self, relativo: str) -> None:
-        """Serve um arquivo de `web/`, e nada fora dela.
+        """Serve um arquivo do build da interface, e nada fora dele.
 
         Mesma razão de `_arquivo`: sem a checagem, `/../.env` lê o token. Aqui
         a base é outra, então a checagem também precisa ser.
         """
-        base = WEB.resolve()
+        base = DIST.resolve()
         alvo = (base / relativo.lstrip("/")).resolve()
         if not alvo.is_file() or base not in alvo.parents:
             self._responder({"erro": f"não encontrado: {relativo}"}, 404)
@@ -445,9 +399,11 @@ def main() -> None:
     Manipulador.pasta_obsidian = args.obsidian
 
     if not PAGINA.is_file():
-        sys.exit(f"página não encontrada: {PAGINA}")
-
-    garantir_bibliotecas()
+        sys.exit(
+            f"interface não construída: {PAGINA} não existe.\n"
+            "  cd web && npm install && npm run build\n"
+            "  (ou `npm run dev`, que serve em 5173 e encaminha /api para cá)"
+        )
 
     # 127.0.0.1, nunca 0.0.0.0: sem autenticação, escutar na rede exporia o
     # conteúdo interno para qualquer máquina do escritório.
