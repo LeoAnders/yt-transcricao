@@ -6,9 +6,11 @@ Uso:
     python transcrever.py --texto pagina-copiada.txt
     python transcrever.py --pagina https://exemplo.com/documentacao
     python transcrever.py --outline https://outline.suaempresa.com/doc/artigo-XXXX
+    python transcrever.py --outline <url> --quadros   # + quadros dos sem legenda
 
 Grava um .md por vídeo em `transcricoes/`, com título, link e marcação de
-tempo.
+tempo. Com `--quadros`, os vídeos que não têm legenda (tipicamente os sem
+fala) viram imagens em `transcricoes/<artigo>/quadros/<id>/` para a IA ler.
 
 Por que yt-dlp e não um `fetch` direto na URL da legenda: o YouTube passou a
 exigir um token de origem de navegador real no endpoint `/api/timedtext` —
@@ -20,6 +22,7 @@ checagem.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -28,10 +31,22 @@ from pathlib import Path
 
 import descobrir
 import limpar
+import quadros
 
 RAIZ = Path(__file__).parent
 YTDLP = RAIZ / "yt-dlp.exe"
 URL_YTDLP = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+
+# Fatia do download de vídeo. O googlevideo estrangula requisição única e
+# grande, e o proxy corporativo derruba conexão longa; o próprio yt-dlp fatia
+# por esse motivo. Aumentar isso reintroduz timeout em vídeo de dezenas de MB.
+PEDACO_BYTES = 8 * 1024 * 1024
+
+# Resolução é o fator limitante para ler texto de terminal no quadro, então
+# pede-se o maior formato até 1080p. `avc1` primeiro porque é o codec que
+# qualquer build de ffmpeg decodifica; os fallbacks cobrem vídeo que só tem
+# vp9/av1 ou que é menor que o teto.
+FORMATO_VIDEO = "bv*[vcodec^=avc1][height<=1080]/bv*[height<=1080]/bv*/b"
 
 
 # --------------------------------------------------------------------------
@@ -95,6 +110,124 @@ def garantir_ytdlp(silencioso: bool = False) -> Path:
     if not silencioso:
         print(f"  ok ({YTDLP.stat().st_size / 1_048_576:.1f} MB)")
     return YTDLP
+
+
+# --------------------------------------------------------------------------
+# download do vídeo (para os que não têm legenda)
+# --------------------------------------------------------------------------
+
+# Baixa em pedaços via Invoke-WebRequest. É o único cliente na máquina que faz
+# autenticação integrada do Windows no proxy: o `yt-dlp -f <video>` e o urllib
+# recebem "407 Proxy Authentication Required" nos bytes do googlevideo, mesmo
+# com --proxy. Os *metadados* passam sem credencial, por isso a URL vem do
+# yt-dlp e só a transferência vem para cá.
+#
+# A URL e o destino chegam por variável de ambiente de propósito: URL de
+# googlevideo tem `&`, `;` e `=` que o `powershell -Command` interpretaria.
+_SCRIPT_DOWNLOAD = r"""
+$ErrorActionPreference = 'Stop'
+$u = $env:YTV_URL
+$pedaco = [int]$env:YTV_PEDACO
+
+# GetProxy devolve a própria URL quando não há proxy configurado; nesse caso
+# passar -Proxy apontaria o download para si mesmo.
+$px = [System.Net.WebRequest]::DefaultWebProxy.GetProxy($u)
+$parametros = @{ UseBasicParsing = $true; TimeoutSec = 120 }
+if ($px.Host -ne ([Uri]$u).Host) {
+    $parametros.Proxy = $px
+    $parametros.ProxyUseDefaultCredentials = $true
+}
+
+$arquivo = [System.IO.File]::Create($env:YTV_SAIDA)
+try {
+    $inicio = 0
+    while ($true) {
+        $fim = $inicio + $pedaco - 1
+        # `&range=` como PARÂMETRO DE URL. O header Range funciona em alguns
+        # formatos, mas o parâmetro é o que o yt-dlp usa e vale para todos.
+        $r = Invoke-WebRequest -Uri "$u&range=$inicio-$fim" @parametros
+        $bytes = $r.Content
+        if ($bytes.Length -eq 0) { break }
+        $arquivo.Write($bytes, 0, $bytes.Length)
+        $inicio += $bytes.Length
+        if ($bytes.Length -lt $pedaco) { break }   # último pedaço
+    }
+} finally {
+    $arquivo.Close()
+}
+Write-Output $inicio
+"""
+
+
+def dados_do_video(url: str, proxy: str | None) -> dict:
+    """Resolve a URL direta do googlevideo, o tamanho e se a origem tem áudio.
+
+    Devolve `{"url": "", ...}` quando não há formato utilizável — quem chama
+    trata como "sem quadros" em vez de abortar o lote inteiro.
+
+    O `tem_audio` vem da lista de formatos da ORIGEM, não do arquivo baixado:
+    baixa-se video-only de propósito (áudio é peso inútil para virar imagem),
+    então o .mp4 local nunca tem faixa de áudio e olhar para ele responderia
+    sempre "mudo".
+    """
+    comando = [
+        str(garantir_ytdlp(silencioso=True)),
+        "--no-warnings", "--quiet",
+        "-f", FORMATO_VIDEO,
+        "--print", "%(filesize,filesize_approx)s|%(formats.:.acodec)s|%(url)s",
+        url,
+    ]
+    if proxy:
+        comando[1:1] = ["--proxy", proxy]
+
+    resultado = subprocess.run(comando, capture_output=True, text=True)
+    linha = resultado.stdout.strip().splitlines()
+    if not linha or linha[0].count("|") < 2:
+        return {"url": "", "tamanho": 0, "tem_audio": False}
+
+    tamanho, codecs, direta = linha[0].split("|", 2)
+    try:
+        esperado = int(tamanho)
+    except ValueError:
+        esperado = 0              # filesize desconhecido não impede baixar
+
+    # a lista vem como repr de Python: ['none', 'mp4a.40.2', ...]
+    tem_audio = any(c not in ("none", "None", "")
+                    for c in re.findall(r"'([^']*)'", codecs))
+    return {"url": direta, "tamanho": esperado, "tem_audio": tem_audio}
+
+
+def baixar_video(url: str, destino: Path, proxy: str | None) -> dict | None:
+    """Baixa o vídeo para `destino`. None se não houver formato disponível.
+
+    Devolve os dados de origem (`arquivo`, `tem_audio`) porque quem chama
+    precisa do `tem_audio` da origem, que o arquivo baixado não revela.
+    """
+    dados = dados_do_video(url, proxy)
+    if not dados["url"]:
+        return None
+
+    esperado = dados["tamanho"]
+    ambiente = {
+        **os.environ,
+        "YTV_URL": dados["url"],
+        "YTV_SAIDA": str(destino),
+        "YTV_PEDACO": str(PEDACO_BYTES),
+    }
+    resultado = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _SCRIPT_DOWNLOAD],
+        capture_output=True, text=True, env=ambiente,
+    )
+    if resultado.returncode != 0 or not destino.exists():
+        print(f"  falha ao baixar o vídeo: {resultado.stderr.strip().splitlines()[-1:]}")
+        return None
+
+    baixado = destino.stat().st_size
+    # Download truncado gera quadros só do começo do vídeo, e isso passaria
+    # despercebido: o ffmpeg extrai o que conseguiu ler sem reclamar.
+    if esperado and baixado < esperado:
+        print(f"  aviso: baixou {baixado} de {esperado} bytes (vídeo incompleto)")
+    return {"arquivo": destino, "tem_audio": dados["tem_audio"]}
 
 
 # --------------------------------------------------------------------------
@@ -179,6 +312,45 @@ def baixar_legendas(urls: list[str], pasta: Path, proxy: str | None,
 
 
 # --------------------------------------------------------------------------
+# quadros dos vídeos sem legenda
+# --------------------------------------------------------------------------
+
+def quadros_dos_sem_legenda(urls: list[str], destino: Path, proxy: str | None,
+                            temporaria: Path, intervalo: int = 4) -> int:
+    """Baixa cada vídeo sem legenda e extrai os quadros em `destino/quadros/`.
+
+    Devolve quantos vídeos renderam quadros. O .mp4 fica na pasta temporária e
+    morre com ela: o entregável é a imagem, e vídeo interno guardado a mais é
+    superfície de vazamento (ver .claude/rules/seguranca.md).
+    """
+    if not quadros.ffmpeg_disponivel():
+        print("\n  ffmpeg não encontrado no PATH; sem quadros.")
+        print("  instale com: winget install Gyan.FFmpeg")
+        return 0
+
+    print(f"\nextraindo quadros de {len(urls)} vídeo(s) sem legenda:\n")
+    prontos = 0
+    for url in urls:
+        video_id = url.split("v=")[-1]
+        origem = baixar_video(url, temporaria / f"{video_id}.mp4", proxy)
+        if origem is None:
+            print(f"  {video_id}: sem formato de vídeo disponível")
+            continue
+
+        relatorio = quadros.extrair_com_relatorio(
+            origem["arquivo"], destino / "quadros" / video_id, intervalo
+        )
+        # Vídeo COM áudio e sem legenda é outro problema (o YouTube não gerou a
+        # legenda ainda, ou o idioma não é o pedido) — avisa para não passar por
+        # "vídeo mudo", que é o caso que os quadros resolvem.
+        aviso = "  [tem áudio: talvez a legenda só não exista ainda]" if origem["tem_audio"] else ""
+        print(f"  {video_id}: {len(relatorio['quadros'])} quadro(s){aviso}")
+        prontos += 1
+
+    return prontos
+
+
+# --------------------------------------------------------------------------
 
 def main() -> None:
     ap = argparse.ArgumentParser(
@@ -196,6 +368,10 @@ def main() -> None:
     ap.add_argument("--sem-fallback", action="store_true",
                     help="não tenta outro idioma quando o pedido não existe")
     ap.add_argument("--sem-proxy", action="store_true", help="ignora o proxy do Windows")
+    ap.add_argument("--quadros", action="store_true",
+                    help="para os vídeos sem legenda, baixa e extrai quadros para leitura por IA")
+    ap.add_argument("--intervalo-quadros", type=int, default=4,
+                    help="segundos entre quadros (padrão: 4)")
     args = ap.parse_args()
 
     entradas = list(args.urls)
@@ -234,19 +410,26 @@ def main() -> None:
             com_fallback=not args.sem_fallback,
         )
 
+        com_quadros = 0
         if pendentes:
             print(f"\nsem legenda automática ({len(pendentes)}):")
             for url in pendentes:
                 print(f"  {url}")
-            print("  vídeo sem fala não gera legenda — para esses, use quadros.py")
+            if args.quadros:
+                com_quadros = quadros_dos_sem_legenda(
+                    pendentes, destino, proxy, pasta_vtt, args.intervalo_quadros
+                )
+            else:
+                print("  vídeo sem fala não gera legenda — use --quadros para lê-los")
 
         arquivos = sorted(pasta_vtt.glob("*.vtt"))
-        if not arquivos:
+        if not arquivos and not com_quadros:
             sys.exit("\nnenhuma legenda baixada.")
 
-        print(f"\nconvertendo {len(arquivos)} legenda(s):\n")
         total = 0
         vistos: set[str] = set()
+        if arquivos:
+            print(f"\nconvertendo {len(arquivos)} legenda(s):\n")
         for vtt in arquivos:
             video_id, _ = limpar.nome_do_arquivo(vtt)
             if video_id in vistos:      # mesma faixa em dois idiomas
@@ -260,6 +443,8 @@ def main() -> None:
             print(f"  {palavras:>6} palavras  {arquivo.name}")
 
     print(f"\n{len(vistos)} arquivo(s) | {total} palavras")
+    if com_quadros:
+        print(f"{com_quadros} vídeo(s) em quadros | {destino / 'quadros'}")
     print(f"saída: {destino}")
 
 
