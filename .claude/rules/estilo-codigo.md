@@ -51,6 +51,12 @@ python -c "import descobrir; print(len(descobrir.ids_em_texto('https://youtu.be/
 # 2. o caminho completo num vídeo curto
 python transcrever.py u2k8KF3d4-E --saida transcricoes/teste
 
+# 2b. o caminho dos quadros. O --idioma zz força o vídeo a cair em "sem
+#     legenda" sem precisar achar um vídeo mudo de verdade — é o que exercita
+#     o download pelo Invoke-WebRequest, que é a parte frágil.
+python transcrever.py u2k8KF3d4-E --idioma zz --sem-fallback --quadros \
+    --saida transcricoes/teste-quadros --intervalo-quadros 10
+
 # 3. o MCP responde ao handshake
 Get-Content teste.jsonl | python mcp_server.py
 

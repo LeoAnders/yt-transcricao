@@ -70,16 +70,27 @@ links; dá um `.vtt`, cobra o Markdown. Testáveis sem internet e sem
 - **Vídeo sem fala → quadros lidos pela própria IA**, não serviço externo de
   compreensão de vídeo. Ver `.claude/rules/seguranca.md`.
 
-- **Download do `googlevideo` usa `&range=` como parâmetro de URL**, não o
-  header `Range` — o header devolve zero bytes.
+- **O vídeo em si não é baixado pelo `yt-dlp`.** Os *metadados* passam pelo
+  proxy sem credencial (é assim que a URL do `googlevideo` é obtida), mas os
+  *bytes* recebem `407` mesmo com `--proxy`. A transferência é feita em
+  pedaços pelo `Invoke-WebRequest -Proxy … -ProxyUseDefaultCredentials`, o
+  único cliente da máquina que autentica sozinho. Ver `baixar_video`.
+
+- **Download do `googlevideo` usa `&range=` como parâmetro de URL.** É o que o
+  próprio `yt-dlp` faz, e o fatiamento evita o estrangulamento e o timeout de
+  requisição única e grande. Nota: o header `Range` também respondeu `206`
+  corretamente num teste em 2026-08-14 — a afirmação anterior de que "o header
+  devolve zero bytes" não reproduziu. O parâmetro está mantido por ser o
+  caminho testado em todos os formatos, não porque o header seja quebrado.
 
 ## Comandos úteis
 
 ```bash
 python transcrever.py --outline <url>      # transcreve um artigo inteiro
+python transcrever.py --outline <url> --quadros   # + imagens dos sem legenda
 python transcrever.py --texto arquivo.txt  # de qualquer texto colado
 python imagens.py <url-artigo>             # baixa as imagens do artigo
-python quadros.py video.mp4                # quadros de vídeo sem fala
+python quadros.py video.mp4                # quadros de vídeo local sem fala
 
 # testar o MCP na mão
 Get-Content teste.jsonl | python mcp_server.py
