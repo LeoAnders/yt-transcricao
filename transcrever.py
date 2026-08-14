@@ -3,10 +3,12 @@
 Uso:
     python transcrever.py https://youtu.be/xxxx https://youtu.be/yyyy
     python transcrever.py --lista links.txt
-    python transcrever.py --outline https://cuka.consistem.com.br/doc/artigo-XXXX
+    python transcrever.py --texto pagina-copiada.txt
+    python transcrever.py --pagina https://exemplo.com/documentacao
+    python transcrever.py --outline https://outline.suaempresa.com/doc/artigo-XXXX
 
-Baixa a legenda automática de cada vídeo com o yt-dlp e grava um .md por
-vídeo em `transcricoes/`, com título, link e marcação de tempo.
+Grava um .md por vídeo em `transcricoes/`, com título, link e marcação de
+tempo.
 
 Por que yt-dlp e não um `fetch` direto na URL da legenda: o YouTube passou a
 exigir um token de origem de navegador real no endpoint `/api/timedtext` —
@@ -16,25 +18,20 @@ checagem.
 """
 
 import argparse
+import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
-import urllib.request
 import winreg
 from pathlib import Path
 
+import descobrir
 import limpar
 
 RAIZ = Path(__file__).parent
 YTDLP = RAIZ / "yt-dlp.exe"
 URL_YTDLP = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-
-# aceita youtu.be/ID e youtube.com/watch?v=ID
-RE_YOUTUBE = re.compile(
-    r"(?:youtu\.be/|youtube\.com/watch\?v=)([A-Za-z0-9_-]{11})"
-)
 
 
 # --------------------------------------------------------------------------
@@ -71,14 +68,16 @@ def detectar_proxy() -> str | None:
     return servidor if servidor.startswith("http") else f"http://{servidor}"
 
 
-def garantir_ytdlp() -> Path:
+def garantir_ytdlp(silencioso: bool = False) -> Path:
     """Baixa o yt-dlp.exe na primeira execução. Usa o PowerShell porque o
-    proxy corporativo exige autenticação integrada do Windows, que o urllib
-    do Python não sabe fazer — o Invoke-WebRequest sabe."""
+    proxy corporativo pode exigir autenticação integrada do Windows, que o
+    urllib do Python não sabe fazer — o Invoke-WebRequest sabe."""
     if YTDLP.exists():
         return YTDLP
 
-    print("yt-dlp.exe não encontrado, baixando do GitHub...")
+    if not silencioso:
+        print("yt-dlp.exe não encontrado, baixando do GitHub...")
+
     script = (
         f"$u='{URL_YTDLP}'; $o='{YTDLP}'; "
         "try { Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing } "
@@ -88,139 +87,95 @@ def garantir_ytdlp() -> Path:
     )
     resultado = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
     if resultado.returncode != 0 or not YTDLP.exists():
         sys.exit(f"falha ao baixar o yt-dlp:\n{resultado.stderr.strip()}")
 
-    print(f"  ok ({YTDLP.stat().st_size / 1_048_576:.1f} MB)")
+    if not silencioso:
+        print(f"  ok ({YTDLP.stat().st_size / 1_048_576:.1f} MB)")
     return YTDLP
 
 
 # --------------------------------------------------------------------------
-# origens dos links
+# download das legendas
 # --------------------------------------------------------------------------
 
-def ler_env(chave: str) -> str | None:
-    """Lê uma chave do ambiente ou do .env ao lado do script (sem depender de
-    biblioteca externa — instalar pacote depende do proxy, que nem sempre
-    responde)."""
-    if os.environ.get(chave):
-        return os.environ[chave]
+def idiomas_disponiveis(url: str, proxy: str | None) -> list[str]:
+    """Lista os códigos de legenda automática que o vídeo tem, para o fallback
+    saber o que pedir em vez de chutar."""
+    comando = [
+        str(garantir_ytdlp(silencioso=True)),
+        "--skip-download", "--no-warnings",
+        "--print-json", "--quiet", url,
+    ]
+    if proxy:
+        comando[1:1] = ["--proxy", proxy]
 
-    env = RAIZ / ".env"
-    if not env.exists():
-        return None
-    for linha in env.read_text(encoding="utf-8").splitlines():
-        linha = linha.strip()
-        if not linha or linha.startswith("#") or "=" not in linha:
-            continue
-        nome, _, valor = linha.partition("=")
-        if nome.strip() == chave:
-            return valor.strip().strip('"').strip("'")
-    return None
+    resultado = subprocess.run(comando, capture_output=True, text=True)
+    try:
+        dados = json.loads(resultado.stdout.strip().splitlines()[0])
+    except (json.JSONDecodeError, IndexError):
+        return []
+    return list(dados.get("automatic_captions", {}).keys())
 
-
-def links_do_outline(url_doc: str) -> list[str]:
-    """Lê um artigo do Outline pela API e extrai os links de YouTube na ordem
-    em que aparecem no texto."""
-    token = ler_env("OUTLINE_API_TOKEN")
-    if not token:
-        sys.exit(
-            "defina OUTLINE_API_TOKEN no .env para usar --outline\n"
-            "(o token sai em Outline > Settings > API Tokens)"
-        )
-
-    base = "/".join(url_doc.split("/")[:3])          # https://host
-    doc_id = url_doc.rstrip("/").split("/")[-1]      # slug-XXXXXXXX
-
-    requisicao = urllib.request.Request(
-        f"{base}/api/documents.info",
-        data=f'{{"id":"{doc_id}"}}'.encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-    # o Outline é interno: vai direto, sem passar pelo proxy
-    abridor = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with abridor.open(requisicao, timeout=30) as resposta:
-        import json
-
-        dados = json.loads(resposta.read().decode("utf-8"))
-
-    documento = dados.get("data", {})
-    texto = documento.get("text", "")
-    print(f'artigo: "{documento.get("title", doc_id)}"')
-
-    ids: list[str] = []
-    for video_id in RE_YOUTUBE.findall(texto):
-        if video_id not in ids:
-            ids.append(video_id)
-    return [f"https://www.youtube.com/watch?v={i}" for i in ids]
-
-
-def normalizar(entradas: list[str]) -> list[str]:
-    """Aceita URL completa ou só o ID de 11 caracteres."""
-    urls: list[str] = []
-    for entrada in entradas:
-        entrada = entrada.strip()
-        if not entrada or entrada.startswith("#"):
-            continue
-        achado = RE_YOUTUBE.search(entrada)
-        video_id = achado.group(1) if achado else entrada
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        if url not in urls:
-            urls.append(url)
-    return urls
-
-
-# --------------------------------------------------------------------------
-# download
-# --------------------------------------------------------------------------
 
 def baixar_legendas(urls: list[str], pasta: Path, proxy: str | None,
-                    idiomas: list[str]) -> None:
-    """Baixa as legendas automáticas no diretório indicado.
+                    idioma: str, com_fallback: bool = True) -> list[str]:
+    """Baixa as legendas automáticas. Devolve as URLs que ficaram sem legenda.
 
-    Tenta os idiomas em ordem e só busca o seguinte para os vídeos que ainda
-    não têm arquivo — pedir vários de uma vez faz o YouTube responder 429.
+    A ordem é do mais específico ao mais genérico, e cada tentativa só busca
+    os vídeos que ainda não têm arquivo — pedir vários idiomas de uma vez faz
+    o YouTube responder 429.
     """
     ytdlp = garantir_ytdlp()
     pendentes = list(urls)
+    tentativas = [f"{idioma}-orig", idioma, f"{idioma}.*"]
 
-    for idioma in idiomas:
-        if not pendentes:
-            break
-
+    def executar(codigo: str, alvos: list[str]) -> None:
         comando = [
             str(ytdlp),
-            "--skip-download",
-            "--write-auto-subs",
-            "--sub-langs", idioma,
+            "--skip-download", "--write-auto-subs",
+            "--sub-langs", codigo,
             "--sub-format", "vtt",
             "--sleep-requests", "1",
-            "--ignore-errors",
-            "--no-warnings",
-            "--quiet",
-            "--progress",
+            "--ignore-errors", "--no-warnings", "--quiet",
             "-o", str(pasta / "%(id)s - %(title)s.%(ext)s"),
-            *pendentes,
+            *alvos,
         ]
         if proxy:
             comando[1:1] = ["--proxy", proxy]
+        print(f"buscando legenda '{codigo}' de {len(alvos)} vídeo(s)...")
+        # a saída do yt-dlp é capturada: quando este módulo roda sob o
+        # servidor MCP, o stdout carrega JSON-RPC e qualquer texto solto
+        # quebra o protocolo
+        subprocess.run(comando, check=False, capture_output=True, text=True)
 
-        print(f"buscando legenda '{idioma}' de {len(pendentes)} vídeo(s)...")
-        subprocess.run(comando, check=False)
+    def ainda_faltam(alvos: list[str]) -> list[str]:
+        prontos = {v.name.split(" - ")[0] for v in pasta.glob("*.vtt")}
+        return [u for u in alvos if u.split("v=")[-1] not in prontos]
 
-        baixados = {v.name.split(" - ")[0] for v in pasta.glob("*.vtt")}
-        pendentes = [u for u in pendentes if u.split("v=")[-1] not in baixados]
+    for codigo in tentativas:
+        if not pendentes:
+            return []
+        executar(codigo, pendentes)
+        pendentes = ainda_faltam(pendentes)
 
-    if pendentes:
-        print(f"\nsem legenda automática disponível ({len(pendentes)}):")
-        for url in pendentes:
-            print(f"  {url}")
+    # fallback de idioma: o vídeo pode simplesmente não ser no idioma pedido.
+    # Em vez de devolver vazio sem explicação, usa o que existir e avisa.
+    if com_fallback and pendentes:
+        for url in list(pendentes):
+            outros = [c for c in idiomas_disponiveis(url, proxy)
+                      if not c.startswith(idioma)]
+            if not outros:
+                continue
+            escolhido = outros[0]
+            print(f"  '{idioma}' indisponível em {url.split('v=')[-1]}; "
+                  f"usando '{escolhido}'")
+            executar(escolhido, [url])
+        pendentes = ainda_faltam(pendentes)
+
+    return pendentes
 
 
 # --------------------------------------------------------------------------
@@ -230,37 +185,60 @@ def main() -> None:
         description="Transcreve vídeos do YouTube pela legenda automática.",
     )
     ap.add_argument("urls", nargs="*", help="URLs ou IDs de vídeos do YouTube")
-    ap.add_argument("--lista", help="arquivo texto com uma URL por linha")
-    ap.add_argument("--outline", help="URL de um artigo do Outline; varre os links de YouTube dele")
-    ap.add_argument("--saida", default="transcricoes", help="pasta de saída (padrão: transcricoes)")
+    ap.add_argument("--lista", help="arquivo com uma URL por linha")
+    ap.add_argument("--texto", help="arquivo qualquer (HTML salvo, Markdown, texto colado)")
+    ap.add_argument("--pagina", help="URL de uma página HTML; extrai os links de YouTube dela")
+    ap.add_argument("--outline", help="URL de um artigo do Outline")
+    ap.add_argument("--saida", default="transcricoes", help="pasta de saída")
     ap.add_argument("--idioma", default="pt", help="idioma da legenda (padrão: pt)")
+    ap.add_argument("--sem-timestamps", action="store_true",
+                    help="texto corrido, sem marcação de tempo")
+    ap.add_argument("--sem-fallback", action="store_true",
+                    help="não tenta outro idioma quando o pedido não existe")
     ap.add_argument("--sem-proxy", action="store_true", help="ignora o proxy do Windows")
     args = ap.parse_args()
 
     entradas = list(args.urls)
+    destino_padrao = args.saida
+
     if args.lista:
         entradas += Path(args.lista).read_text(encoding="utf-8").splitlines()
+    if args.texto:
+        entradas += descobrir.de_arquivo(args.texto)
+    if args.pagina:
+        entradas += descobrir.de_pagina(args.pagina)
     if args.outline:
-        entradas += links_do_outline(args.outline)
+        titulo, achados = descobrir.de_outline(args.outline)
+        print(f'artigo: "{titulo}"')
+        entradas += achados
+        # sem --saida explícito, separa por artigo: é o que evita o inchaço
+        # de jogar dezenas de assuntos numa pasta só
+        if args.saida == "transcricoes":
+            destino_padrao = str(Path("transcricoes") / _seguro(titulo))
 
-    urls = normalizar(entradas)
+    urls = descobrir.normalizar(entradas)
     if not urls:
-        ap.error("nenhum vídeo informado (use URLs, --lista ou --outline)")
+        ap.error("nenhum vídeo encontrado (use URLs, --lista, --texto, --pagina ou --outline)")
 
     proxy = None if args.sem_proxy else detectar_proxy()
     print(f"{len(urls)} vídeo(s) | proxy: {proxy or 'direto'}\n")
 
-    # "pt-orig" é a faixa original gerada pelo ASR; "pt" costuma ser a mesma
-    # coisa, mas alguns vídeos só expõem uma das duas
-    idiomas = [f"{args.idioma}-orig", args.idioma, f"{args.idioma}.*"]
-
-    destino = Path(args.saida)
+    destino = Path(destino_padrao)
     if not destino.is_absolute():
         destino = RAIZ / destino
 
     with tempfile.TemporaryDirectory() as tmp:
         pasta_vtt = Path(tmp)
-        baixar_legendas(urls, pasta_vtt, proxy, idiomas)
+        pendentes = baixar_legendas(
+            urls, pasta_vtt, proxy, args.idioma,
+            com_fallback=not args.sem_fallback,
+        )
+
+        if pendentes:
+            print(f"\nsem legenda automática ({len(pendentes)}):")
+            for url in pendentes:
+                print(f"  {url}")
+            print("  vídeo sem fala não gera legenda — para esses, use quadros.py")
 
         arquivos = sorted(pasta_vtt.glob("*.vtt"))
         if not arquivos:
@@ -275,12 +253,21 @@ def main() -> None:
                 continue
             vistos.add(video_id)
 
-            arquivo, palavras = limpar.converter(vtt, destino)
+            arquivo, palavras = limpar.converter(
+                vtt, destino, com_timestamps=not args.sem_timestamps
+            )
             total += palavras
             print(f"  {palavras:>6} palavras  {arquivo.name}")
 
     print(f"\n{len(vistos)} arquivo(s) | {total} palavras")
     print(f"saída: {destino}")
+
+
+def _seguro(nome: str) -> str:
+    """Nome de pasta válido no Windows."""
+    for proibido in '<>:"/\\|?*':
+        nome = nome.replace(proibido, "-")
+    return nome.strip(" .") or "sem-titulo"
 
 
 if __name__ == "__main__":

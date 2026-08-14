@@ -86,14 +86,23 @@ def nome_do_arquivo(vtt: Path) -> tuple[str, str]:
     return video_id.strip(), (titulo.strip() or video_id.strip())
 
 
-def converter(vtt: Path, destino: Path) -> tuple[Path, int]:
+def montar_corpo(paragrafos: list[tuple[int, str]],
+                 com_timestamps: bool = True) -> str:
+    """Monta o texto final. Com timestamp dá para citar o momento do vídeo;
+    sem ele o texto flui melhor para resumir."""
+    if com_timestamps:
+        return "\n\n".join(
+            f"({s // 60:02d}:{s % 60:02d}) {t}" for s, t in paragrafos
+        )
+    return "\n\n".join(t for _, t in paragrafos)
+
+
+def converter(vtt: Path, destino: Path,
+              com_timestamps: bool = True) -> tuple[Path, int]:
     """Converte um .vtt em .md no destino. Devolve (arquivo, nº de palavras)."""
     video_id, titulo = nome_do_arquivo(vtt)
     paragrafos = agrupar(extrair_falas(vtt.read_text(encoding="utf-8")))
-
-    corpo = "\n\n".join(
-        f"({s // 60:02d}:{s % 60:02d}) {t}" for s, t in paragrafos
-    )
+    corpo = montar_corpo(paragrafos, com_timestamps)
 
     conteudo = (
         f"# {titulo}\n\n"
