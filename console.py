@@ -1,22 +1,19 @@
 """Por que este módulo existe.
 
-O fluxo inteiro já funciona por linha de comando, e por linha de comando ele
-serve uma pessoa só: quem sabe os comandos. O portão humano — conferir as
-pendências antes de publicar — é justamente a parte que precisa ser fácil,
-porque é a parte que, sendo chata, deixa de ser feita.
+API HTTP do motor de transcrição — analisar, gerar e ler o resultado por
+requisição, para quem não quer chamar `transcrever.py`/`redigir.py` na mão.
 
-Aqui ele vira tela: o documento de um lado, o que ainda não foi decidido do
-outro, o destino num seletor, e o botão de publicar desabilitado enquanto
-houver bloqueio.
+**Sem interface embutida.** A interface (React/Vite) mora em outro
+repositório, que fala com esta API por HTTP; a fronteira é só isso, não o
+formato — este módulo continua não decidindo nada além de orquestrar
+`transcrever` e `redigir`, e a entrada continua sendo só link(s) de vídeo do
+YouTube (ler artigo de documentação — Outline, Notion — é responsabilidade de
+quem chama, via MCP da própria ferramenta de documentação).
 
 **Escopo deliberado: local, um usuário, sem autenticação.** Escuta em
 127.0.0.1 e só. Um servidor que atende outras pessoas com a credencial de uma
 só é compartilhamento de conta, e a resposta para isso é chave de API da
-empresa — outro projeto, outra conta de custo. Ver o design em
-`docs/superpowers/specs/2026-08-14-camada-editorial-design.md`.
-
-A separação HTTP ↔ pipeline é proposital: este módulo não decide nada. Quem
-recusa publicação é o `publicar.py`, porque interface se contorna.
+empresa — outro projeto, outra conta de custo.
 """
 
 from __future__ import annotations
@@ -29,36 +26,21 @@ import threading
 import traceback
 import urllib.parse
 import uuid
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import descobrir
 import publicar as pub
 import redigir as red
+import transcrever as transc
 
 RAIZ = Path(__file__).resolve().parent
-# Os assets da interface ficam em `web/`, separados dos módulos Python: o que é
-# página não se mistura com o que é processo. A fronteira que importa, porém,
-# não é a pasta — é este módulo não decidir nada. Ver a docstring acima.
-# A interface é um projeto React/Vite normal, em `web/`. Este servidor serve o
-# resultado do `npm run build`; em desenvolvimento quem serve é o `npm run dev`,
-# que encaminha /api para cá (ver web/vite.config.js).
-#
-# `npm` funciona nesta rede — foi medido. O que **não** funciona é o `pip`, que
-# recebe 407 no proxy: é por isso que o lado Python continua sem dependência
-# nenhuma, e por isso os dois casos não devem ser tratados como o mesmo.
-WEB = RAIZ / "web"
-DIST = WEB / "dist"
-PAGINA = DIST / "index.html"
 
-TIPOS = {".html": "text/html", ".js": "application/javascript",
-         ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json",
-         ".woff2": "font/woff2", ".png": "image/png", ".jpg": "image/jpeg"}
+TIPOS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 
 # Trabalho em andamento, por id. Uma geração leva minutos: fazê-la dentro do
-# handler deixaria o navegador pendurado até o timeout. O trabalho vai para uma
-# thread e a página pergunta o estado.
+# handler deixaria quem chamou pendurado até o timeout. O trabalho vai para
+# uma thread e quem chamou pergunta o estado.
 _TRABALHOS: dict[str, dict] = {}
 _TRAVA = threading.Lock()
 
@@ -73,17 +55,32 @@ def _anotar(job: str, linha: str) -> None:
         _TRABALHOS[job]["linhas"].append(linha)
 
 
-def _gerar(job: str, url: str, com_quadros: bool, intervalo: int,
+def _analisar_fonte(texto: str) -> tuple[str, list[str]]:
+    """Devolve (título, urls) a partir do que foi colado: um ou mais links de
+    vídeo do YouTube. Só essa forma de entrada — ver a nota em descobrir.py.
+    """
+    urls = descobrir.urls_em_texto(texto) or descobrir.normalizar([texto])
+    if not urls:
+        raise ValueError("nenhum vídeo do YouTube encontrado no que foi colado")
+
+    proxy = transc.detectar_proxy()
+    meta = transc.metadados_do_video(urls[0], proxy)
+    primeiro = meta.get("titulo") or f"Vídeo {urls[0].split('v=')[-1]}"
+    titulo = primeiro if len(urls) == 1 else f"{primeiro} e mais {len(urls) - 1}"
+    return titulo, urls
+
+
+def _gerar(job: str, texto: str, com_quadros: bool, intervalo: int,
            base_saida: Path) -> None:
     """Baixa (via `transcrever.py`) e redige. Roda numa thread."""
     try:
-        _anotar(job, f"analisando {url}")
-        titulo, urls = descobrir.de_outline(url)
+        _anotar(job, "analisando")
+        titulo, urls = _analisar_fonte(texto)
         pasta = base_saida / red._seguro(titulo)
-        _anotar(job, f'artigo: "{titulo}" — {len(urls)} vídeo(s)')
+        _anotar(job, f'"{titulo}" — {len(urls)} vídeo(s)')
 
         comando = [sys.executable, str(RAIZ / "transcrever.py"),
-                   "--outline", url, "--saida", str(pasta)]
+                   *urls, "--saida", str(pasta)]
         if com_quadros:
             comando += ["--quadros", "--intervalo-quadros", str(intervalo)]
 
@@ -98,21 +95,24 @@ def _gerar(job: str, url: str, com_quadros: bool, intervalo: int,
 
         _anotar(job, "redigindo")
         material = red.material_de_pasta(
-            pasta, titulo=titulo, fonte=url, fonte_tipo="outline",
+            pasta, titulo=titulo, fonte=", ".join(urls), fonte_tipo="links",
             interno=True, intervalo_quadros=intervalo,
         )
         artigos = red.redigir(material)
 
         destino = pasta / "documentacao"
         destino.mkdir(parents=True, exist_ok=True)
+        arquivos = []
         for artigo in artigos:
             arquivo = destino / f"{red._seguro(artigo.titulo)}.md"
             arquivo.write_text(artigo.markdown(), encoding="utf-8")
+            arquivos.append(str(arquivo.relative_to(base_saida)))
             marca = "BLOQUEADO" if artigo.bloqueado else f"{len(artigo.pendencias)} pendência(s)"
             _anotar(job, f"{arquivo.name} [{marca}]")
 
         with _TRAVA:
             _TRABALHOS[job]["estado"] = "pronto"
+            _TRABALHOS[job]["arquivos"] = arquivos
     except Exception as erro:  # noqa: BLE001 — a thread não pode morrer calada
         with _TRAVA:
             _TRABALHOS[job]["estado"] = "erro"
@@ -128,7 +128,7 @@ def _gerar(job: str, url: str, com_quadros: bool, intervalo: int,
 def _pendencias_do_texto(corpo: str) -> list[dict]:
     """Lê o bloco `## ⚠️ Conferir antes de usar` de volta.
 
-    O arquivo é a verdade: alguém pode ter editado à mão entre gerar e revisar.
+    O arquivo é a verdade: alguém pode ter editado à mão depois de gerar.
     """
     pendencias = []
     dentro = False
@@ -148,56 +148,6 @@ def _pendencias_do_texto(corpo: str) -> list[dict]:
     return pendencias
 
 
-def _documentos(base: Path) -> list[dict]:
-    achados = []
-    for arquivo in sorted(base.glob("*/documentacao/*.md")):
-        try:
-            artigo = pub.ler_documento(arquivo)
-        except pub.PublicarErro:
-            continue
-        pendencias = _pendencias_do_texto(artigo.corpo)
-        achados.append({
-            "arquivo": str(arquivo.relative_to(base)),
-            "titulo": artigo.titulo,
-            "artigo_de": arquivo.parent.parent.name,
-            "palavras": len(artigo.corpo.split()),
-            "pendencias": len(pendencias),
-            "bloqueado": any(p["bloqueia"] for p in pendencias),
-            "interno": artigo.front_matter.get("interno", True),
-        })
-    return achados
-
-
-def _resolver(arquivo: Path, linha_alvo: str) -> int:
-    """Tira uma pendência do documento. Devolve quantas sobraram.
-
-    Resolver é decisão humana e fica registrada onde importa: no arquivo. Se a
-    lista esvazia, o cabeçalho sai junto — documento sem pendência não deve
-    carregar um aviso vazio, que é como aviso vira ruído que ninguém lê.
-    """
-    texto = arquivo.read_text(encoding="utf-8")
-    linhas = texto.splitlines()
-    restantes = [l for l in linhas if l.strip() != linha_alvo.strip()]
-
-    corpo = "\n".join(restantes)
-    sobraram = _pendencias_do_texto(corpo)
-    if not sobraram:
-        limpas, dentro = [], False
-        for linha in restantes:
-            if linha.startswith("## ") and "Conferir antes de usar" in linha:
-                dentro = True
-                continue
-            if dentro and linha.startswith("## "):
-                dentro = False
-            if not dentro:
-                limpas.append(linha)
-        corpo = "\n".join(limpas)
-
-    arquivo.write_text(corpo.lstrip("\n").replace("\n\n\n", "\n\n") + "\n",
-                       encoding="utf-8")
-    return len(sobraram)
-
-
 # --------------------------------------------------------------------------
 # servidor
 # --------------------------------------------------------------------------
@@ -205,8 +155,6 @@ def _resolver(arquivo: Path, linha_alvo: str) -> int:
 
 class Manipulador(BaseHTTPRequestHandler):
     base_documentos = Path("transcricoes")
-    base_outline = ""
-    pasta_obsidian = ""
 
     def _responder(self, dados, codigo: int = 200) -> None:
         corpo = json.dumps(dados, ensure_ascii=False).encode("utf-8")
@@ -224,7 +172,7 @@ class Manipulador(BaseHTTPRequestHandler):
 
     def log_message(self, formato, *args) -> None:
         # o padrão escreve uma linha por requisição, inclusive as de polling —
-        # com a página perguntando o estado a cada segundo, isso vira ruído
+        # com quem chama perguntando o estado a cada segundo, isso vira ruído
         pass
 
     # ---------------- GET ----------------
@@ -234,14 +182,6 @@ class Manipulador(BaseHTTPRequestHandler):
         consulta = urllib.parse.parse_qs(rota.query)
 
         try:
-            if rota.path in ("/", "/index.html"):
-                self._estatico("index.html")
-                return
-
-            if rota.path == "/api/documentos":
-                self._responder(_documentos(self.base_documentos))
-                return
-
             if rota.path == "/api/documento":
                 arquivo = self._arquivo(consulta.get("arquivo", [""])[0])
                 artigo = pub.ler_documento(arquivo)
@@ -253,12 +193,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 })
                 return
 
-            if rota.path == "/api/colecoes":
-                if not self.base_outline:
-                    self._responder([])
-                    return
-                destino = pub.DestinoOutline(self.base_outline, "")
-                self._responder(destino.colecoes())
+            if rota.path == "/api/midia":
+                self._midia(consulta.get("arquivo", [""])[0])
                 return
 
             if rota.path == "/api/trabalho":
@@ -267,16 +203,11 @@ class Manipulador(BaseHTTPRequestHandler):
                     self._responder(_TRABALHOS.get(job) or {"estado": "desconhecido"})
                 return
 
-            # o que não é API é arquivo estático do build do Vite
-            if not rota.path.startswith("/api/"):
-                self._estatico(rota.path)
-                return
-
             self._responder({"erro": "rota desconhecida"}, 404)
 
         except ValueError as erro:
-            # pedido malformado (caminho fora da base, JSON torto) não é falha
-            # do servidor: a página precisa distinguir "você pediu errado" de
+            # pedido malformado (caminho fora da base) não é falha do
+            # servidor: quem chamou precisa distinguir "você pediu errado" de
             # "quebrou aqui dentro"
             self._responder({"erro": str(erro)}, 400)
         except Exception as erro:  # noqa: BLE001
@@ -290,7 +221,7 @@ class Manipulador(BaseHTTPRequestHandler):
             corpo = self._corpo()
 
             if rota.path == "/api/analisar":
-                titulo, urls = descobrir.de_outline(corpo["url"])
+                titulo, urls = _analisar_fonte(corpo["url"])
                 self._responder({"titulo": titulo, "videos": urls})
                 return
 
@@ -307,60 +238,14 @@ class Manipulador(BaseHTTPRequestHandler):
                 self._responder({"id": job})
                 return
 
-            if rota.path == "/api/resolver":
-                arquivo = self._arquivo(corpo["arquivo"])
-                sobraram = _resolver(arquivo, corpo["linha"])
-                self._responder({"pendencias": sobraram})
-                return
-
-            if rota.path == "/api/publicar":
-                arquivo = self._arquivo(corpo["arquivo"])
-                artigo = pub.ler_documento(arquivo)
-                if corpo.get("destino") == "obsidian":
-                    if not self.pasta_obsidian:
-                        raise pub.PublicarErro(
-                            "cofre do Obsidian não configurado: inicie com "
-                            "--obsidian <pasta>"
-                        )
-                    destino = pub.DestinoObsidian(Path(self.pasta_obsidian))
-                else:
-                    destino = pub.DestinoOutline(self.base_outline,
-                                                 corpo.get("colecao", ""))
-                onde = pub.publicar(artigo, destino,
-                                    rascunho=bool(corpo.get("rascunho", True)))
-                self._responder({"onde": onde})
-                return
-
             self._responder({"erro": "rota desconhecida"}, 404)
 
         except pub.PublicarErro as erro:
-            # recusa não é falha do servidor: é a resposta certa, e a página
-            # mostra o motivo em vez de um 500 genérico
             self._responder({"erro": str(erro)}, 409)
         except Exception as erro:  # noqa: BLE001
             self._responder({"erro": str(erro)}, 500)
 
     # ---------------- caminhos ----------------
-
-    def _estatico(self, relativo: str) -> None:
-        """Serve um arquivo do build da interface, e nada fora dele.
-
-        Mesma razão de `_arquivo`: sem a checagem, `/../.env` lê o token. Aqui
-        a base é outra, então a checagem também precisa ser.
-        """
-        base = DIST.resolve()
-        alvo = (base / relativo.lstrip("/")).resolve()
-        if not alvo.is_file() or base not in alvo.parents:
-            self._responder({"erro": f"não encontrado: {relativo}"}, 404)
-            return
-
-        dados = alvo.read_bytes()
-        tipo = TIPOS.get(alvo.suffix, "application/octet-stream")
-        self.send_response(200)
-        self.send_header("Content-Type", f"{tipo}; charset=utf-8")
-        self.send_header("Content-Length", str(len(dados)))
-        self.end_headers()
-        self.wfile.write(dados)
 
     def _arquivo(self, relativo: str) -> Path:
         """Resolve o caminho e recusa qualquer coisa fora da base.
@@ -375,6 +260,19 @@ class Manipulador(BaseHTTPRequestHandler):
             raise ValueError(f"caminho fora da base: {relativo}")
         return alvo
 
+    def _midia(self, relativo: str) -> None:
+        """Serve um quadro/imagem de `transcricoes/` — mesma trava do
+        `_arquivo`, porque o quadro embutido no artigo aponta para dentro
+        dessa base, nunca para fora dela."""
+        alvo = self._arquivo(relativo)
+        dados = alvo.read_bytes()
+        tipo = TIPOS.get(alvo.suffix.lower(), "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Length", str(len(dados)))
+        self.end_headers()
+        self.wfile.write(dados)
+
 
 def main() -> None:
     for fluxo in (sys.stdout, sys.stderr):
@@ -382,39 +280,22 @@ def main() -> None:
             fluxo.reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(
-        description="Console local de revisão e publicação."
+        description="API HTTP do motor de transcrição — sem interface embutida."
     )
     parser.add_argument("--porta", type=int, default=8765)
     parser.add_argument("--documentos", default="transcricoes",
-                        help="onde procurar os documentos gerados")
-    parser.add_argument("--outline", default=descobrir.ler_env("OUTLINE_URL") or "",
-                        help="https://outline.suaempresa.com")
-    parser.add_argument("--obsidian", default=descobrir.ler_env("OBSIDIAN_VAULT") or "",
-                        help="pasta do cofre do Obsidian")
-    parser.add_argument("--sem-navegador", action="store_true")
+                        help="onde gravar/procurar os documentos gerados")
     args = parser.parse_args()
 
     Manipulador.base_documentos = Path(args.documentos)
-    Manipulador.base_outline = args.outline.rstrip("/")
-    Manipulador.pasta_obsidian = args.obsidian
-
-    if not PAGINA.is_file():
-        sys.exit(
-            f"interface não construída: {PAGINA} não existe.\n"
-            "  cd web && npm install && npm run build\n"
-            "  (ou `npm run dev`, que serve em 5173 e encaminha /api para cá)"
-        )
 
     # 127.0.0.1, nunca 0.0.0.0: sem autenticação, escutar na rede exporia o
     # conteúdo interno para qualquer máquina do escritório.
     servidor = ThreadingHTTPServer(("127.0.0.1", args.porta), Manipulador)
     endereco = f"http://127.0.0.1:{args.porta}"
-    print(f"console em {endereco}")
+    print(f"API em {endereco}")
     print(f"documentos: {Path(args.documentos).resolve()}")
     print("Ctrl+C para parar")
-
-    if not args.sem_navegador:
-        webbrowser.open(endereco)
 
     try:
         servidor.serve_forever()

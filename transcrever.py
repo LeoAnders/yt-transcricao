@@ -5,8 +5,11 @@ Uso:
     python transcrever.py --lista links.txt
     python transcrever.py --texto pagina-copiada.txt
     python transcrever.py --pagina https://exemplo.com/documentacao
-    python transcrever.py --outline https://outline.suaempresa.com/doc/artigo-XXXX
-    python transcrever.py --outline <url> --quadros   # + quadros dos sem legenda
+    python transcrever.py https://youtu.be/xxxx --quadros   # + quadros dos sem legenda
+
+Ler artigo de documentação (Outline, Notion, etc.) não é responsabilidade
+deste módulo: quem tiver o texto em mãos (por MCP, por exemplo) usa
+`descobrir.urls_em_texto` nele e passa os links aqui.
 
 Grava um .md por vídeo em `transcricoes/`, com título, link e marcação de
 tempo. Com `--quadros`, os vídeos que não têm legenda (tipicamente os sem
@@ -289,6 +292,29 @@ def baixar_video(url: str, destino: Path, proxy: str | None) -> dict:
 # download das legendas
 # --------------------------------------------------------------------------
 
+def metadados_do_video(url: str, proxy: str | None) -> dict:
+    """Título e duração de um vídeo avulso, para a análise sem artigo do
+    Outline mostrar o que tem antes de gerar — mesma chamada de metadados
+    que `idiomas_disponiveis`, sem baixar nenhum byte de vídeo."""
+    comando = [
+        str(garantir_ytdlp(silencioso=True)),
+        "--skip-download", "--no-warnings",
+        "--print-json", "--quiet", url,
+    ]
+    if proxy:
+        comando[1:1] = ["--proxy", proxy]
+
+    resultado = subprocess.run(comando, capture_output=True, text=True)
+    try:
+        dados = json.loads(resultado.stdout.strip().splitlines()[0])
+    except (json.JSONDecodeError, IndexError):
+        return {"titulo": "", "duracao_seg": 0}
+    return {
+        "titulo": dados.get("title") or "",
+        "duracao_seg": dados.get("duration") or 0,
+    }
+
+
 def idiomas_disponiveis(url: str, proxy: str | None) -> list[str]:
     """Lista os códigos de legenda automática que o vídeo tem, para o fallback
     saber o que pedir em vez de chutar."""
@@ -424,7 +450,6 @@ def main() -> None:
     ap.add_argument("--lista", help="arquivo com uma URL por linha")
     ap.add_argument("--texto", help="arquivo qualquer (HTML salvo, Markdown, texto colado)")
     ap.add_argument("--pagina", help="URL de uma página HTML; extrai os links de YouTube dela")
-    ap.add_argument("--outline", help="URL de um artigo do Outline")
     ap.add_argument("--saida", default="transcricoes", help="pasta de saída")
     ap.add_argument("--idioma", default="pt", help="idioma da legenda (padrão: pt)")
     ap.add_argument("--sem-timestamps", action="store_true",
@@ -447,18 +472,10 @@ def main() -> None:
         entradas += descobrir.de_arquivo(args.texto)
     if args.pagina:
         entradas += descobrir.de_pagina(args.pagina)
-    if args.outline:
-        titulo, achados = descobrir.de_outline(args.outline)
-        print(f'artigo: "{titulo}"')
-        entradas += achados
-        # sem --saida explícito, separa por artigo: é o que evita o inchaço
-        # de jogar dezenas de assuntos numa pasta só
-        if args.saida == "transcricoes":
-            destino_padrao = str(Path("transcricoes") / _seguro(titulo))
 
     urls = descobrir.normalizar(entradas)
     if not urls:
-        ap.error("nenhum vídeo encontrado (use URLs, --lista, --texto, --pagina ou --outline)")
+        ap.error("nenhum vídeo encontrado (use URLs, --lista, --texto ou --pagina)")
 
     proxy = None if args.sem_proxy else detectar_proxy()
     print(f"{len(urls)} vídeo(s) | proxy: {proxy or 'direto'}\n")

@@ -1,12 +1,48 @@
 # yt-transcricao
 
-Ferramenta que transforma vídeos e imagens de documentação em texto que uma
-IA consegue ler. Funciona como linha de comando **e** como servidor MCP.
+Motor que transforma vídeo do YouTube em texto e imagem que uma IA consegue
+ler. Funciona como linha de comando, como servidor MCP e como API HTTP —
+**a entrada é sempre um ou mais links de vídeo do YouTube, nunca artigo de
+documentação** (Outline, Notion etc.): quem tiver o texto de um artigo em
+mãos usa o MCP da própria ferramenta de documentação para achar os links, e
+passa os links pra cá. Ver "Decisão de 2026-08-15", abaixo.
 
 Nasceu de um problema concreto: a documentação interna da empresa tem ~35
-vídeos no YouTube e dezenas de prints de tela. Uma IA não assiste vídeo nem
-enxerga imagem linkada — então esse conteúdo simplesmente não existe para
-uma skill ou um RAG montado sobre o texto.
+vídeos no YouTube. Uma IA não assiste vídeo — então esse conteúdo
+simplesmente não existe para uma skill ou um RAG montado sobre o texto.
+
+## Decisão de 2026-08-15: motor, não plataforma
+
+Este projeto **não lê artigo de documentação nem publica em destino
+nenhum** — já leu (Outline, via API própria) e já publicou (Outline,
+Obsidian), e os dois foram retirados daqui de propósito:
+
+- **Ler artigo é redundante com o MCP da própria ferramenta.** Quem usa
+  este projeto via agente de IA já tem o MCP do Outline (ou o que for)
+  conectado — pedir a esse MCP o texto do artigo e chamar
+  `descobrir.urls_em_texto` nele é estritamente melhor que este projeto
+  reimplementar um cliente REST do Outline com seu próprio token.
+- **A interface (React/Vite) mora em outro repositório.** Este projeto
+  expõe só a API HTTP (`console.py`) e o MCP (`mcp_server.py`); quem quiser
+  uma tela fala com a API, não importa este código Python. O primeiro
+  consumidor é o **Vidraft** (repositório irmão), uma demo pro time de
+  marketing: cola o link de um vídeo de treinamento/demonstração já
+  gravado e recebe um rascunho de conteúdo com os prints reais extraídos
+  do vídeo.
+- **`publicar.py` continua no repositório, mas não é chamado por
+  `console.py`.** Publicar num destino (Outline, Obsidian) é decisão de
+  produto, não do motor — fica guardado para se um dia existir de novo um
+  console de revisão interna, mas hoje é código órfão, sem consumidor.
+
+Consequência prática: **`imagens.py` foi removido** (baixava print de
+artigo do Outline — mesma redundância com o MCP), e as ferramentas de MCP
+`listar_videos_do_artigo`, `transcrever_artigo` e `imagens_do_artigo`
+também. A flag `--outline` saiu do `transcrever.py`.
+
+**Pendência conhecida:** a skill `.claude/skills/extrair-conhecimento/`
+ainda referencia essas ferramentas removidas — precisa ser reescrita para
+orquestrar via MCP do Outline + `extrair_videos`/`obter_transcricao`/
+`quadros_do_video` em vez de chamar as ferramentas antigas diretamente.
 
 ## Idioma
 
@@ -41,34 +77,24 @@ Consequências que **não devem ser revertidas** sem resolver o proxy primeiro:
   `powershell -Command Invoke-WebRequest -ProxyUseDefaultCredentials`, que é
   o único cliente na máquina que autentica sozinho;
 - o `yt-dlp.exe` é baixado avulso do GitHub, não instalado por pacote;
-- **a interface é um projeto React/Vite normal**, em `web/`, com `npm install`
-  e `npm run dev` — porque o `npm` funciona (ver acima). O lado Python é que
-  continua sem dependência nenhuma.
-
-  Em desenvolvimento, o Vite serve em `5173` e encaminha `/api` para o
-  `console.py` em `8765`. Em produção, `npm run build` gera `web/dist/`, que o
-  próprio `console.py` serve — uma origem só, sem proxy no caminho.
-
-  O `console.py` não decide nada — só chama `redigir` e `publicar` —, então
-  trocar a interface não toca no motor. Quem recusa uma publicação é o
-  `publicar.py`, no servidor, porque interface se contorna.
+- **não há interface neste repositório** (ver "Decisão de 2026-08-15"). Se um
+  dia isso mudar, a mesma lógica de "`npm` funciona, `pip` não" volta a valer.
 
 ## Estrutura
 
 ```
-descobrir.py     Acha vídeos em texto/página/Outline — extração PURA
+descobrir.py     Acha vídeos em texto/página — extração PURA, sem Outline
 limpar.py        Converte .vtt em Markdown — PURO, não conhece rede
-imagens.py       Baixa as imagens de um artigo do Outline
 quadros.py       Extrai quadros de vídeo via ffmpeg (para vídeo sem fala)
 transcrever.py   Linha de comando: proxy, download, orquestração
 redigir.py       Transcrição + quadros → documento, pelo `claude` da máquina
-publicar.py      Destinos (Outline, Obsidian) e as travas de publicação
-console.py       Console local de revisão — HTTP da stdlib em 127.0.0.1
-web/             Interface React/Vite: index.html, src/, vite.config.js
-web/src/         App, api.js, markdown.js e componentes/
-web/dist/        build do Vite — servido pelo console.py, não versionado
+publicar.py      Destinos (Outline, Obsidian) — órfão, sem consumidor hoje
+console.py       API HTTP do motor — stdlib em 127.0.0.1, sem interface
 mcp_server.py    Servidor MCP sobre os módulos acima
 ```
+
+A interface (React/Vite) que consome a API do `console.py` mora no
+repositório irmão **Vidraft**, não aqui.
 
 `descobrir.py` e `limpar.py` são puros de propósito: dá um texto, cobra os
 links; dá um `.vtt`, cobra o Markdown. Testáveis sem internet e sem
@@ -86,9 +112,11 @@ links; dá um `.vtt`, cobra o Markdown. Testáveis sem internet e sem
   dados ao player *android vr*. **Isso é uma fragilidade conhecida**: quando o
   YouTube fechar essa porta, a ferramenta para, e não há plano B fácil.
 
-- **`transcrever_artigo` não devolve o texto na resposta do MCP.** Grava em
-  disco e devolve o índice. Um único artigo rendeu 23.420 palavras; despejar
-  isso numa resposta estoura o contexto e derruba a conversa.
+- **As ferramentas de MCP que geram arquivo não devolvem o texto na
+  resposta.** Gravam em disco e devolvem o índice. Um único vídeo bem falado
+  já passa de mil palavras; devolver o corpo inteiro de vários de uma vez
+  estoura o contexto e derruba a conversa. `/api/gerar` no `console.py` segue
+  a mesma lógica: devolve o caminho do arquivo, não o corpo.
 
 - **Vídeo sem fala → quadros lidos pela própria IA**, não serviço externo de
   compreensão de vídeo. Ver `.claude/rules/seguranca.md`.
@@ -109,25 +137,20 @@ links; dá um `.vtt`, cobra o Markdown. Testáveis sem internet e sem
 ## Comandos úteis
 
 ```bash
-python transcrever.py --outline <url>      # transcreve um artigo inteiro
-python transcrever.py --outline <url> --quadros   # + imagens dos sem legenda
-python transcrever.py --texto arquivo.txt  # de qualquer texto colado
-python imagens.py <url-artigo>             # baixa as imagens do artigo
-python quadros.py video.mp4                # quadros de vídeo local sem fala
+python transcrever.py https://youtu.be/xxxx        # transcreve um ou mais vídeos
+python transcrever.py https://youtu.be/xxxx --quadros   # + imagens dos sem legenda
+python transcrever.py --texto arquivo.txt          # de qualquer texto colado
+python quadros.py video.mp4                        # quadros de vídeo local sem fala
 
-python redigir.py transcricoes/<artigo>    # transcrição → documento
-python publicar.py <arquivo.md> --base <url> --colecao <id>
-python publicar.py --base <url> --listar-colecoes   # leitura, para achar o id
-python console.py --outline <url>          # a interface, em 127.0.0.1:8765
-
-# interface (React/Vite) — a primeira vez precisa do install
-cd web && npm install
-cd web && npm run dev      # 5173, com recarga; encaminha /api para o 8765
-cd web && npm run build    # gera web/dist/, que o console.py serve
+python redigir.py transcricoes/<pasta>             # transcrição → documento
+python console.py                                  # API em 127.0.0.1:8765, sem interface
 
 # testar o MCP na mão
 Get-Content teste.jsonl | python mcp_server.py
 ```
+
+`publicar.py` (Outline, Obsidian) segue no repositório mas não é chamado por
+nada hoje — ver "Decisão de 2026-08-15".
 
 Não há suíte de testes automatizados. A verificação é manual e está descrita
 em `.claude/rules/estilo-codigo.md`.
@@ -152,6 +175,11 @@ Consultar antes de desenvolver:
   continha tokens de API reais
 
 ## Skills
+
+**As duas seguintes estão QUEBRADAS depois da decisão de 2026-08-15** — ambas
+chamam `imagens.py`/as ferramentas de MCP de artigo do Outline, que foram
+removidas. Precisam ser reescritas para orquestrar via MCP do Outline antes
+de voltar a funcionar:
 
 - `.claude/skills/extrair-conhecimento/` — o fluxo completo de virar um
   artigo de documentação em conhecimento utilizável, incluindo a curadoria

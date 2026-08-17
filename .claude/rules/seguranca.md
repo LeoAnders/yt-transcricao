@@ -39,10 +39,14 @@ enquanto ler o quadro entrega o comando digitado e a resposta.
 
 ## Segredos
 
-- O token do Outline vem de `OUTLINE_API_KEY` (ou `OUTLINE_API_TOKEN`), lido
-  do ambiente **ou** de um `.env` local. O `.env` está no `.gitignore`.
-- **Preferir a variável de ambiente que já existe** a pedir que o segredo
-  seja duplicado num arquivo novo. Duplicar segredo aumenta a superfície.
+- Desde a decisão de 2026-08-15 (ver `CLAUDE.md`), o motor em uso
+  (`console.py`, `mcp_server.py`, `transcrever.py`) **não lê nenhum segredo
+  próprio** — a entrada é só link de vídeo do YouTube, sem autenticação.
+  `publicar.py` continua lendo `OUTLINE_API_KEY`/`OUTLINE_API_TOKEN` e
+  `OBSIDIAN_VAULT` de `.env`, mas está órfão, sem consumidor hoje.
+- Se algum dia ler segredo de novo: **preferir a variável de ambiente que já
+  existe** a pedir que o segredo seja duplicado num arquivo novo — duplicar
+  segredo aumenta a superfície.
 - Nunca imprimir o valor de um token em log, em saída de comando ou em
   resposta. Para diagnosticar, imprimir só presença e tamanho.
 
