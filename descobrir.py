@@ -1,14 +1,14 @@
 """Descoberta de vídeos do YouTube em qualquer fonte de texto.
 
 Separado do resto de propósito: extrair IDs de um texto é uma função pura e
-testável sem rede. As fontes (arquivo, página HTML, artigo do Outline) são só
-maneiras diferentes de conseguir esse texto.
+testável sem rede. As fontes (arquivo, página HTML) são só maneiras diferentes
+de conseguir esse texto — ler artigo de documentação (Outline, Notion, etc.)
+não é responsabilidade deste projeto: quem tiver o texto em mãos (por MCP, por
+exemplo) chama `urls_em_texto` nele.
 """
 
-import json
 import os
 import re
-import sys
 import urllib.request
 from pathlib import Path
 
@@ -180,36 +180,8 @@ def _nomes_aceitos(chave: str) -> tuple[str, ...]:
     return SINONIMOS.get(chave, (chave,))
 
 
-def documento_outline(url_doc: str) -> tuple[str, str]:
-    """Lê um artigo do Outline pela API. Devolve (título, texto em Markdown)."""
-    token = ler_env("OUTLINE_API_TOKEN")
-    if not token:
-        sys.exit(
-            "defina OUTLINE_API_TOKEN no .env para usar --outline\n"
-            "(o token sai em Outline > Settings > API Tokens)"
-        )
-
-    base = "/".join(url_doc.split("/")[:3])          # https://host
-    doc_id = url_doc.rstrip("/").split("/")[-1]      # slug-XXXXXXXX
-
-    requisicao = urllib.request.Request(
-        f"{base}/api/documents.info",
-        data=json.dumps({"id": doc_id}).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-    # instância interna: vai direto, sem passar pelo proxy
-    abridor = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with abridor.open(requisicao, timeout=30) as resposta:
-        dados = json.loads(resposta.read().decode("utf-8"))
-
-    documento = dados.get("data", {})
-    return documento.get("title", doc_id), documento.get("text", "")
-
-
-def de_outline(url_doc: str) -> tuple[str, list[str]]:
-    """Lê um artigo do Outline. Devolve (título, urls dos vídeos)."""
-    titulo, texto = documento_outline(url_doc)
-    return titulo, urls_em_texto(texto)
+# Leitura de artigo do Outline foi removida daqui de propósito: duplicava o
+# que o MCP do Outline já faz (autenticado, já conectado em quem usa este
+# projeto via agente). Quem precisar dos vídeos de um artigo do Outline busca
+# o texto pelo MCP do Outline e chama `urls_em_texto`/`ids_em_texto` nele —
+# funções acima, agnósticas de origem. Ver a análise de 2026-08-15.

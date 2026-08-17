@@ -363,7 +363,11 @@ COMO ESCREVER
   e o que os quadros mostram. Se deduziu, registre em `pendencias`.
 - Diga o que dá errado e a mensagem que aparece.
 - Registre o que a documentação escrita omite e só o vídeo mostra.
-- Ao citar imagem ou quadro, use o instante: (00:04:18).
+- Quando houver "QUADROS DISPONÍVEIS" de um vídeo, ilustre os passos que se
+  beneficiam de imagem embutindo o quadro em Markdown com o caminho EXATO da
+  lista — `![tela em 00:04:18](quadros/<id>/quadro_003.jpg)` — e nunca invente
+  um caminho que não esteja listado. Sem quadro disponível, cite só o instante
+  entre parênteses: `(00:04:18)`.
 - Descarte saudação, "como falei no vídeo anterior", passo dito e refeito.
 
 O QUE VIRA PENDÊNCIA (o que você NÃO pode decidir sozinho)
@@ -393,6 +397,17 @@ def _redigir_assunto(material: Material, assunto: dict,
         texto = descricoes.get(t.video_id) or t.texto
         origem = "quadros da tela" if t.leitura == "quadros" else "legenda automática"
         blocos.append(f"### {t.titulo}  [{t.video_id}, {origem}]\n{texto}")
+
+        # caminho relativo à pasta do artigo (últimos 3 segmentos: sempre
+        # "quadros/<id>/quadro_NNN.jpg", venha `pasta` relativa ou absoluta) —
+        # é esse o caminho que o modelo deve embutir, nunca o absoluto: o
+        # documento não deve carregar a estrutura de disco de quem gerou.
+        do_video = [q for q in material.quadros if q.video_id == t.video_id]
+        if do_video:
+            lista = "\n".join(
+                f"  {q.instante} → {'/'.join(q.caminho.parts[-3:])}" for q in do_video
+            )
+            blocos.append(f"QUADROS DISPONÍVEIS de {t.video_id}:\n{lista}")
 
     partes = [REGRAS_REDIGIR, f"Assunto: {assunto.get('titulo', material.titulo)}"]
     if material.texto_artigo.strip():
