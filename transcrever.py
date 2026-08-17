@@ -529,12 +529,5 @@ def main() -> None:
     print(f"saída: {destino}")
 
 
-def _seguro(nome: str) -> str:
-    """Nome de pasta válido no Windows."""
-    for proibido in '<>:"/\\|?*':
-        nome = nome.replace(proibido, "-")
-    return nome.strip(" .") or "sem-titulo"
-
-
 if __name__ == "__main__":
     main()

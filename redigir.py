@@ -568,6 +568,7 @@ def _escalar(valor) -> str:
 
 
 CABECALHO_VIDEO = re.compile(r"^- Vídeo:\s*https://youtu\.be/([\w-]+)", re.MULTILINE)
+CABECALHO_TITULO = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 
 
 def material_de_pasta(pasta: Path, *, titulo: str = "", fonte: str = "",
@@ -588,10 +589,15 @@ def material_de_pasta(pasta: Path, *, titulo: str = "", fonte: str = "",
         bruto = arquivo.read_text(encoding="utf-8")
         achado = CABECALHO_VIDEO.search(bruto)
         video_id = achado.group(1) if achado else arquivo.stem
+        # o título de verdade vem do cabeçalho `# título`, não do nome do
+        # arquivo — o nome é cortado em 80 caracteres (ver limpar.converter),
+        # o cabeçalho não.
+        achado_titulo = CABECALHO_TITULO.search(bruto)
+        titulo_video = achado_titulo.group(1).strip() if achado_titulo else arquivo.stem
         _, _, corpo = bruto.partition("\n---\n")
         transcricoes.append(Transcricao(
             video_id=video_id,
-            titulo=arquivo.stem,
+            titulo=titulo_video,
             texto=(corpo or bruto).strip(),
         ))
 
@@ -639,8 +645,18 @@ def material_de_pasta(pasta: Path, *, titulo: str = "", fonte: str = "",
 
 
 def _seguro(nome: str) -> str:
+    """Nome de pasta/arquivo válido no Windows.
+
+    Cortado em 80 caracteres: título de vídeo real não tem limite de
+    tamanho, e sem cortar o caminho completo (pasta + arquivo, dentro de
+    onde quer que o projeto esteja) pode passar dos 260 caracteres que o
+    Windows aceita sem suporte a caminho longo — reproduzido em 2026-08-17
+    com um título de 42 caracteres numa pasta clonada mais funda que o
+    normal.
+    """
     nome = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", nome)
-    return nome.strip(" .") or "sem-titulo"
+    nome = nome.strip(" .") or "sem-titulo"
+    return nome[:80].rstrip(" .") or "sem-titulo"
 
 
 def main() -> None:

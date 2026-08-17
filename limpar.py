@@ -112,6 +112,11 @@ def converter(vtt: Path, destino: Path,
     )
 
     destino.mkdir(parents=True, exist_ok=True)
-    arquivo = destino / f"{titulo}.md"
+    # o NOME DO ARQUIVO é cortado (o `# título` acima, dentro do conteúdo,
+    # continua completo) — sem cortar, um título de vídeo longo some com o
+    # orçamento de 260 caracteres que o Windows aceita no caminho inteiro.
+    # Reproduzido em 2026-08-17. `limpar.py` é puro e não importa
+    # `redigir._seguro`/`transcrever._seguro` de propósito — repete aqui.
+    arquivo = destino / f"{titulo[:80].rstrip(' .') or video_id}.md"
     arquivo.write_text(conteudo, encoding="utf-8")
     return arquivo, len(corpo.split())
