@@ -60,83 +60,74 @@ export default function Gerar({ aoTerminar }) {
   }, [url, quadros, aoTerminar]);
 
   return (
-    <section id="gerar">
-      <span className="pill">Novo documento</span>
-      <h2>Cola o link. Antes de gastar, mostra o que tem.</h2>
-      <p className="lede">
-        A análise é de graça: acontece antes de baixar qualquer coisa. Saber que
-        são dezenove vídeos e não três muda o plano.
-      </p>
+    <div className="tela">
+      <header className="tela-header">
+        <span className="eyebrow">Novo documento</span>
+        <h2>Cola o link. Antes de gastar, mostra o que tem.</h2>
+        <p className="lede">
+          A análise é de graça: acontece antes de baixar qualquer coisa. Saber que
+          são dezenove vídeos e não três muda o plano.
+        </p>
+      </header>
 
-      <div className="app">
-        <div className="titlebar">
-          <span className="lights">
-            <i />
-            <i />
-            <i />
-          </span>
-          <span className="caminho">docly · novo documento</span>
-        </div>
+      <div className="card">
+        <Passos atual={achado || rodando ? 1 : 0} />
 
-        <div className="pane">
-          <Passos atual={achado || rodando ? 1 : 0} />
-
-          <div className="linha">
+        <div className="linha">
+          <input
+            className="campo"
+            type="text"
+            value={url}
+            placeholder="https://outline.interno/doc/artigo-XXXX"
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && analisar()}
+          />
+          <button className="btn" onClick={analisar} disabled={!url.trim() || rodando}>
+            Analisar
+          </button>
+          <label className="check">
             <input
-              className="campo"
-              type="text"
-              value={url}
-              placeholder="https://outline.interno/doc/artigo-XXXX"
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && analisar()}
+              type="checkbox"
+              checked={quadros}
+              onChange={(e) => setQuadros(e.target.checked)}
             />
-            <button className="btn" onClick={analisar} disabled={!url.trim() || rodando}>
-              Analisar
-            </button>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={quadros}
-                onChange={(e) => setQuadros(e.target.checked)}
-              />
-              ler a tela dos vídeos sem fala
-            </label>
-            <button className="btn pri" onClick={gerar} disabled={!achado || rodando}>
-              {rodando ? "gerando…" : "Gerar documentação →"}
-            </button>
-          </div>
-
-          {achado && (
-            <>
-              <div className="counts">
-                <div className="hl">
-                  <b>{achado.videos.length}</b>
-                  <span>vídeos encontrados</span>
-                </div>
-                <div>
-                  <b>{quadros ? "sim" : "não"}</b>
-                  <span>ler a tela dos sem fala</span>
-                </div>
-              </div>
-              <p className="lede" style={{ margin: "14px 0 0", fontSize: "15px" }}>
-                Artigo: <strong>{achado.titulo}</strong>
-              </p>
-            </>
-          )}
-
-          {erro && (
-            <p className="aviso stop" style={{ marginTop: "14px" }}>
-              {erro}
-            </p>
-          )}
-
-          {linhas.length > 0 && (
-            <div className="log" ref={caixaDoLog}>
-              {linhas.join("\n")}
-            </div>
-          )}
+            ler a tela dos vídeos sem fala
+          </label>
+          <button className="btn pri" onClick={gerar} disabled={!achado || rodando}>
+            {rodando ? "gerando…" : "Gerar documentação →"}
+          </button>
         </div>
+
+        {achado && (
+          <>
+            <div className="counts">
+              <div className="hl">
+                <b>{achado.videos.length}</b>
+                <span>vídeos encontrados</span>
+              </div>
+              <div>
+                <b>{quadros ? "sim" : "não"}</b>
+                <span>ler a tela dos sem fala</span>
+              </div>
+            </div>
+            <p className="lede" style={{ margin: "14px 0 0", fontSize: "15px" }}>
+              Artigo: <strong>{achado.titulo}</strong>
+            </p>
+          </>
+        )}
+
+        {erro && (
+          <p className="aviso stop" style={{ marginTop: "14px" }}>
+            {erro}
+          </p>
+        )}
+
+        {linhas.length > 0 && (
+          <div className="log" ref={caixaDoLog}>
+            {linhas.join("\n")}
+          </div>
+        )}
       </div>
-    </section>
+    </div>
   );
 }

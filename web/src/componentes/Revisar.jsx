@@ -39,13 +39,15 @@ export default function Revisar({ docs, colecoes, recarregar }) {
   }
 
   return (
-    <section id="revisar">
-      <span className="pill quiet">Revisar e publicar</span>
-      <h2>Publicar é o último passo, não o primeiro</h2>
-      <p className="lede">
-        O que sai da máquina é proposta. Enquanto houver pendência que bloqueia,
-        o botão fica desabilitado — e quem recusa é o servidor, não esta página.
-      </p>
+    <div className="tela largo">
+      <header className="tela-header">
+        <span className="eyebrow">Revisar e publicar</span>
+        <h2>Publicar é o último passo, não o primeiro</h2>
+        <p className="lede">
+          O que sai da máquina é proposta. Enquanto houver pendência que bloqueia,
+          o botão fica desabilitado — e quem recusa é o servidor, não esta página.
+        </p>
+      </header>
 
       <div className="split">
         <div>
@@ -77,16 +79,7 @@ export default function Revisar({ docs, colecoes, recarregar }) {
         {erro && <p className="aviso stop">{erro}</p>}
 
         {doc ? (
-          <div className="app">
-            <div className="titlebar">
-              <span className="lights">
-                <i />
-                <i />
-                <i />
-              </span>
-              <span className="caminho">docly · revisão · {arquivo}</span>
-            </div>
-
+          <div className="card doc-card">
             <div className="doc">
               <article className="corpo">
                 <p className="titulo">{doc.titulo}</p>
@@ -105,6 +98,6 @@ export default function Revisar({ docs, colecoes, recarregar }) {
           !erro && <p className="vazio">Escolha um documento à esquerda.</p>
         )}
       </div>
-    </section>
+    </div>
   );
 }
