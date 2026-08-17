@@ -82,7 +82,10 @@ def _gerar(job: str, texto: str, com_quadros: bool, intervalo: int,
         comando = [sys.executable, str(RAIZ / "transcrever.py"),
                    *urls, "--saida", str(pasta)]
         if com_quadros:
-            comando += ["--quadros", "--intervalo-quadros", str(intervalo)]
+            # --quadros-sempre, não --quadros: a maioria dos vídeos de
+            # treinamento tem legenda, e --quadros sozinho só extrai dos
+            # mudos — sem imagem nenhuma no documento no caso comum.
+            comando += ["--quadros-sempre", "--intervalo-quadros", str(intervalo)]
 
         _anotar(job, "baixando legendas" + (" e quadros" if com_quadros else ""))
         # capture_output pelo mesmo motivo do mcp_server: um yt-dlp escrevendo

@@ -104,7 +104,9 @@ quadro do mesmo instante mostra o nome escrito na tela, exato. Quem reconstrói
 o termo é quem lê os dois.
 
 Por isso `transcrever.py` (linha de comando) e `/api/gerar` (API HTTP)
-aceitam `--quadros`: para os vídeos sem legenda, baixa e vira imagem. E
+aceitam `--quadros` (só os vídeos sem legenda) e `--quadros-sempre` (todo
+vídeo, mesmo com legenda — mais lento, porque baixa o vídeo inteiro sempre,
+mas garante imagem real no documento mesmo quando já há fala). E
 `quadros_do_video` existe, no MCP, para pedir um vídeo específico sem
 processar um lote inteiro.
 
@@ -277,4 +279,5 @@ player em vez de linkar.
 | `--sem-fallback` | não tenta outro idioma quando o pedido não existe |
 | `--sem-proxy` | ignora o proxy configurado no Windows |
 | `--quadros` | para os vídeos sem legenda, baixa e vira imagens |
+| `--quadros-sempre` | de todo vídeo, mesmo com legenda — baixa o vídeo inteiro sempre, mais lento |
 | `--intervalo-quadros N` | segundos entre quadros (padrão: `4`) |

@@ -459,6 +459,10 @@ def main() -> None:
     ap.add_argument("--sem-proxy", action="store_true", help="ignora o proxy do Windows")
     ap.add_argument("--quadros", action="store_true",
                     help="para os vídeos sem legenda, baixa e extrai quadros para leitura por IA")
+    ap.add_argument("--quadros-sempre", action="store_true",
+                    help="extrai quadros de TODO vídeo, mesmo com legenda — baixa o "
+                         "vídeo inteiro sempre, não só o áudio; mais lento e mais "
+                         "pesado, mas garante imagem real mesmo quando já há fala")
     ap.add_argument("--intervalo-quadros", type=int, default=4,
                     help="segundos entre quadros (padrão: 4)")
     args = ap.parse_args()
@@ -496,12 +500,17 @@ def main() -> None:
             print(f"\nsem legenda automática ({len(pendentes)}):")
             for url in pendentes:
                 print(f"  {url}")
-            if args.quadros:
-                com_quadros = quadros_dos_videos(
-                    pendentes, destino, proxy, pasta_vtt, args.intervalo_quadros
-                )
-            else:
-                print("  vídeo sem fala não gera legenda — use --quadros para lê-los")
+
+        # --quadros-sempre extrai de todo vídeo (mesmo com legenda), porque a
+        # imagem real na tela é o que ilustra o documento — --quadros sozinho
+        # só cobre o vídeo mudo, que é a minoria num acervo de treinamento.
+        alvos_quadros = urls if args.quadros_sempre else (pendentes if args.quadros else [])
+        if alvos_quadros:
+            com_quadros = quadros_dos_videos(
+                alvos_quadros, destino, proxy, pasta_vtt, args.intervalo_quadros
+            )
+        elif pendentes:
+            print("  vídeo sem fala não gera legenda — use --quadros para lê-los")
 
         arquivos = sorted(pasta_vtt.glob("*.vtt"))
         if not arquivos and not com_quadros:
