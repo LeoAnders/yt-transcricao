@@ -443,6 +443,16 @@ def quadros_dos_videos(urls: list[str], destino: Path, proxy: str | None,
 # --------------------------------------------------------------------------
 
 def main() -> None:
+    # O resumo final imprime nome de arquivo derivado do título do vídeo, e o
+    # título pode trazer caractere que o console do Windows (cp1252) não
+    # codifica — o `⧸` que substitui a barra é o caso comum. Sem isto o print
+    # estoura com UnicodeEncodeError DEPOIS de gravar tudo, e quem encadeia o
+    # comando lê o código de saída como falha de um trabalho que deu certo.
+    # Mesmo tratamento do console.py, publicar.py e redigir.py.
+    for fluxo in (sys.stdout, sys.stderr):
+        if hasattr(fluxo, "reconfigure"):
+            fluxo.reconfigure(encoding="utf-8", errors="replace")
+
     ap = argparse.ArgumentParser(
         description="Transcreve vídeos do YouTube pela legenda automática.",
     )
