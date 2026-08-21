@@ -199,6 +199,19 @@
         "details": "transcricao.py com obter()/SemLegenda/VideoInvalido; console.py com _transcrever e a rota; suite em testes/ com unittest da biblioteca padrao (zero pip), incluindo verificacao por AST de que redigir nao entra no caminho.",
         "testStrategy": "python -m unittest discover -s testes: obter() em todas as formas de link, legenda rolante limpa, fallback de idioma, sem legenda, url invalida, falha de processo, rota HTTP de ponta a ponta em 127.0.0.1 e ausencia de redigir por AST e em execucao.",
         "subtasks": []
+      },
+      {
+        "id": 13,
+        "title": "fix: remove codigo de idioma com digito do titulo do video",
+        "description": "limpar.nome_do_arquivo nao removia sufixo de idioma com digito (.pt-es-419, .es-419): o titulo do video chegava com o sufixo colado. Padrao passa a exigir 2-3 letras no primeiro segmento e aceitar segmentos alfanumericos depois.",
+        "status": "done",
+        "priority": "medium",
+        "dependencies": [
+          12
+        ],
+        "details": "Reproduzido em 2026-08-21 com dQw4w9WgXcQ, cuja legenda em pt e traduzida e sai como '<titulo>.pt-es-419.vtt'. Afeta CLI, MCP e as duas rotas HTTP, porque todos passam por nome_do_arquivo.",
+        "testStrategy": "testes/test_limpar.py: sufixos pt, pt-orig, pt-es-419, es-419, zh-Hans, pt-BR, en-US; titulo terminando em 'Ep. Final' e em 'v2.1' nao pode ser cortado.",
+        "subtasks": []
       }
     ],
     "metadata": {

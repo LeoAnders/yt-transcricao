@@ -80,8 +80,14 @@ def nome_do_arquivo(vtt: Path) -> tuple[str, str]:
     for sufixo in (".vtt",):
         if nome.endswith(sufixo):
             nome = nome[: -len(sufixo)]
-    # remove o código de idioma que o yt-dlp acrescenta (.pt-orig, .pt, ...)
-    nome = re.sub(r"\.[a-zA-Z-]+$", "", nome)
+    # remove o código de idioma que o yt-dlp acrescenta (.pt, .pt-orig,
+    # .es-419, .pt-es-419, .zh-Hans...). O padrão anterior era `[a-zA-Z-]+`,
+    # que não cobria código com dígito: numa legenda traduzida o arquivo sai
+    # como "<título>.pt-es-419.vtt" e o título chegava com o sufixo colado
+    # (reproduzido em 2026-08-21 com dQw4w9WgXcQ). Exigir 2–3 letras no
+    # primeiro segmento também evita comer título que termina em ponto mais
+    # palavra ("Ep. Final").
+    nome = re.sub(r"\.[a-zA-Z]{2,3}(?:-[A-Za-z0-9]+)*$", "", nome)
     video_id, _, titulo = nome.partition(" - ")
     return video_id.strip(), (titulo.strip() or video_id.strip())
 
