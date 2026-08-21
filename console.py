@@ -14,6 +14,13 @@ quem chama, via MCP da própria ferramenta de documentação).
 127.0.0.1 e só. Um servidor que atende outras pessoas com a credencial de uma
 só é compartilhamento de conta, e a resposta para isso é chave de API da
 empresa — outro projeto, outra conta de custo.
+
+**Duas famílias de rota, de propósito.** `/api/gerar` transcreve *e* redige,
+pelo `claude` da máquina (`redigir.py`). `/api/transcrever` devolve **só a
+transcrição**, sem nenhum LLM no caminho — é o recorte que o Vidport consome,
+porque ele resume com o Codex do próprio usuário e não pode ter Claude no
+meio. Não juntar as duas: quem quer o dado não deve pagar o tempo (nem a
+interpretação) de um modelo.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ import descobrir
 import publicar as pub
 import redigir as red
 import transcrever as transc
+import transcricao as tr
 
 RAIZ = Path(__file__).resolve().parent
 
@@ -119,6 +127,39 @@ def _gerar(job: str, texto: str, com_quadros: bool, intervalo: int,
     except Exception as erro:  # noqa: BLE001 — a thread não pode morrer calada
         with _TRAVA:
             _TRABALHOS[job]["estado"] = "erro"
+            _TRABALHOS[job]["erro"] = str(erro) or erro.__class__.__name__
+        _anotar(job, traceback.format_exc(limit=1).strip().splitlines()[-1])
+
+
+def _transcrever(job: str, url: str, idioma: str, com_timestamps: bool) -> None:
+    """Transcrição pura, numa thread. **Não** passa por `redigir`.
+
+    A única coisa que este caminho faz é `transcricao.obter` — nenhum LLM é
+    invocado, nem indiretamente. Ver a nota no topo do módulo.
+    """
+    try:
+        _anotar(job, "buscando legenda")
+        dados = tr.obter(url, idioma=idioma, com_timestamps=com_timestamps)
+        _anotar(job, f'"{dados["titulo"]}" — {len(dados["paragrafos"])} parágrafo(s)')
+        with _TRAVA:
+            _TRABALHOS[job]["estado"] = "pronto"
+            _TRABALHOS[job]["transcricao"] = dados
+    except tr.SemLegenda as erro:
+        # Vídeo sem fala não gera legenda: é resultado esperado, não defeito.
+        # Sai com um código próprio para quem chama poder dizer isso ao usuário.
+        with _TRAVA:
+            _TRABALHOS[job]["estado"] = "erro"
+            _TRABALHOS[job]["codigo"] = "sem_legenda"
+            _TRABALHOS[job]["erro"] = str(erro)
+    except tr.VideoInvalido as erro:
+        with _TRAVA:
+            _TRABALHOS[job]["estado"] = "erro"
+            _TRABALHOS[job]["codigo"] = "video_invalido"
+            _TRABALHOS[job]["erro"] = str(erro)
+    except Exception as erro:  # noqa: BLE001 — a thread não pode morrer calada
+        with _TRAVA:
+            _TRABALHOS[job]["estado"] = "erro"
+            _TRABALHOS[job]["codigo"] = "falha"
             _TRABALHOS[job]["erro"] = str(erro) or erro.__class__.__name__
         _anotar(job, traceback.format_exc(limit=1).strip().splitlines()[-1])
 
@@ -226,6 +267,27 @@ class Manipulador(BaseHTTPRequestHandler):
             if rota.path == "/api/analisar":
                 titulo, urls = _analisar_fonte(corpo["url"])
                 self._responder({"titulo": titulo, "videos": urls})
+                return
+
+            if rota.path == "/api/transcrever":
+                # Transcrição pura: nenhum LLM. Mesmo modelo de job do
+                # /api/gerar (baixar legenda leva de segundos a minutos e
+                # penduraria quem chamou até o timeout), mas o trabalho é
+                # _transcrever, não _gerar.
+                url = (corpo.get("url") or "").strip()
+                if not url:
+                    self._responder({"erro": "informe 'url'"}, 400)
+                    return
+                job = uuid.uuid4().hex[:12]
+                with _TRAVA:
+                    _TRABALHOS[job] = {"estado": "rodando", "linhas": [], "erro": ""}
+                threading.Thread(
+                    target=_transcrever,
+                    args=(job, url, (corpo.get("idioma") or tr.IDIOMA_PADRAO),
+                          corpo.get("com_timestamps", True) is not False),
+                    daemon=True,
+                ).start()
+                self._responder({"id": job})
                 return
 
             if rota.path == "/api/gerar":

@@ -144,6 +144,7 @@ python quadros.py video.mp4                        # quadros de vídeo local sem
 
 python redigir.py transcricoes/<pasta>             # transcrição → documento
 python console.py                                  # API em 127.0.0.1:8765, sem interface
+python -m unittest discover -s testes -v           # suíte (não toca a rede)
 
 # testar o MCP na mão
 Get-Content teste.jsonl | python mcp_server.py
@@ -152,8 +153,11 @@ Get-Content teste.jsonl | python mcp_server.py
 `publicar.py` (Outline, Obsidian) segue no repositório mas não é chamado por
 nada hoje — ver "Decisão de 2026-08-15".
 
-Não há suíte de testes automatizados. A verificação é manual e está descrita
-em `.claude/rules/estilo-codigo.md`.
+Há uma suíte para o que é testável sem rede (`python -m unittest discover -s
+testes -v`, só biblioteca padrão — a regra de zero `pip` vale para os testes).
+Ela cobre `transcricao.py` e a rota `/api/transcrever`, inclusive a garantia,
+via AST, de que esse caminho não chama `redigir.py`. O resto da verificação
+continua manual e está descrito em `.claude/rules/estilo-codigo.md`.
 
 ## Limites propositais (não implementar)
 

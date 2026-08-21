@@ -188,12 +188,55 @@ python console.py            # 127.0.0.1:8765
 | Rota | O que faz |
 | --- | --- |
 | `POST /api/analisar` | encontra vídeo(s) no texto colado, sem baixar nada |
-| `POST /api/gerar` | baixa, transcreve e redige em segundo plano; devolve o id do trabalho |
-| `GET /api/trabalho?id=` | estado do trabalho e, quando pronto, os arquivos gerados |
+| `POST /api/transcrever` | **só transcreve** — sem LLM; devolve o id do trabalho |
+| `POST /api/gerar` | baixa, transcreve e **redige** em segundo plano; devolve o id |
+| `GET /api/trabalho?id=` | estado do trabalho e, quando pronto, o resultado |
 | `GET /api/documento?arquivo=` | conteúdo de um documento gerado, com as pendências |
 | `GET /api/midia?arquivo=` | serve um quadro/imagem referenciado no documento |
 
-O primeiro consumidor é o [Vidraft](../vidraft), repositório irmão.
+### Transcrição pura vs. documento redigido
+
+As duas rotas de trabalho existem separadas de propósito:
+
+- `POST /api/gerar` transcreve **e** redige o documento, chamando o `claude`
+  da máquina (`redigir.py`). É o caminho para gerar documentação.
+- `POST /api/transcrever` devolve **só a transcrição** — `transcricao.py`, sem
+  nenhum LLM no caminho de código. É o caminho para quem quer o dado e vai
+  interpretá-lo por conta própria.
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/transcrever   -H "Content-Type: application/json"   -d '{"url": "https://youtu.be/XXXXXXXXXXX"}'
+# {"id": "a1b2c3d4e5f6"}
+
+curl "http://127.0.0.1:8765/api/trabalho?id=a1b2c3d4e5f6"
+```
+
+Quando fica pronto:
+
+```json
+{
+  "estado": "pronto",
+  "transcricao": {
+    "videoId": "XXXXXXXXXXX",
+    "titulo": "Título do vídeo",
+    "url": "https://youtu.be/XXXXXXXXXXX",
+    "idioma": "pt",
+    "origem": "youtube_auto_caption",
+    "texto": "(00:00) primeiro parágrafo...",
+    "paragrafos": [{ "segundo": 0, "texto": "primeiro parágrafo..." }]
+  }
+}
+```
+
+Em erro, além de `erro` (texto) vem um `codigo` estável para quem chama poder
+distinguir os casos: `sem_legenda` (vídeo sem fala — não é defeito),
+`video_invalido` (não é link do YouTube) e `falha` (o resto).
+
+Aceita `idioma` (padrão `pt`) e `com_timestamps` (padrão `true`) no corpo.
+
+Consumidores: [Vidraft](../vidraft) usa `/api/gerar`; o
+[Vidport](../vidport) usa `/api/transcrever` e resume com o Codex do próprio
+usuário.
 
 ## Estrutura
 
@@ -203,12 +246,20 @@ O primeiro consumidor é o [Vidraft](../vidraft), repositório irmão.
 | `limpar.py` | converte `.vtt` em Markdown — **puro**, não conhece rede |
 | `quadros.py` | extrai quadros via ffmpeg |
 | `transcrever.py` | proxy, download de legenda e de vídeo, orquestração |
+| `transcricao.py` | link → transcrição, **sem LLM** — compõe `transcrever` + `limpar` |
 | `redigir.py` | transcrição + quadros → documento, pelo `claude` da máquina |
 | `console.py` | API HTTP sobre os módulos acima |
 | `mcp_server.py` | servidor MCP sobre os módulos acima |
 
-`descobrir.py` e `limpar.py` são testáveis sem internet: dê um texto, cobre os
-links; dê um `.vtt`, cobre o Markdown.
+`descobrir.py`, `limpar.py` e `transcricao.py` são testáveis sem internet: dê
+um texto, cobre os links; dê um `.vtt`, cobre o Markdown e a transcrição.
+
+```bash
+python -m unittest discover -s testes -v
+```
+
+A suíte usa só o `unittest` da biblioteca padrão — a regra de zero dependência
+de `pip` vale para os testes também.
 
 Convenções em [CLAUDE.md](CLAUDE.md) e `.claude/rules/` — vale ler
 `seguranca.md` antes de mexer no que a ferramenta extrai.

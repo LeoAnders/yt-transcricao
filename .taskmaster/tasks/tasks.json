@@ -188,6 +188,17 @@
         "dependencies": [],
         "priority": "medium",
         "subtasks": []
+      },
+      {
+        "id": 12,
+        "title": "feat: expoe transcricao pura por http, sem llm",
+        "description": "Modulo transcricao.py (link do YouTube -> dict com texto e paragrafos, compondo transcrever.baixar_legendas e limpar.*) e rota POST /api/transcrever no console.py, reaproveitando o modelo de job existente. O caminho nao importa nem chama redigir.py/Claude. Consumidor: Vidport, que resume com o Codex do proprio usuario.",
+        "status": "done",
+        "priority": "high",
+        "dependencies": [],
+        "details": "transcricao.py com obter()/SemLegenda/VideoInvalido; console.py com _transcrever e a rota; suite em testes/ com unittest da biblioteca padrao (zero pip), incluindo verificacao por AST de que redigir nao entra no caminho.",
+        "testStrategy": "python -m unittest discover -s testes: obter() em todas as formas de link, legenda rolante limpa, fallback de idioma, sem legenda, url invalida, falha de processo, rota HTTP de ponta a ponta em 127.0.0.1 e ausencia de redigir por AST e em execucao.",
+        "subtasks": []
       }
     ],
     "metadata": {
